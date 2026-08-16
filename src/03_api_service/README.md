@@ -42,7 +42,7 @@ under `modules/seismic/`.
 ## Run locally
 
 ```bash
-pip install -r ../../requirements-ml.txt
+pip install -r ../../requirements.txt
 cd src/03_api_service
 uvicorn app.main:app --reload --port 8000
 curl -H "x-api-token: $MODULE2_API_TOKEN" http://localhost:8000/events
@@ -51,7 +51,7 @@ curl -H "x-api-token: $MODULE2_API_TOKEN" http://localhost:8000/events
 ## Deploy to Railway
 
 1. Connect this GitHub repo to a new Railway project (railway.app dashboard — no CLI/SSH required, matches the "manageable from a phone" requirement).
-2. **Set the service's Root Directory to `src/03_api_service`** — Railway → your service → Settings → Source → Root Directory. This is where `railway.json` actually lives, and its `startCommand` assumes it's already running from this directory (no `cd` in it).
+2. **Leave Root Directory unset** (default = repo root) — `railway.json` lives at the repo root specifically so Railway finds it without any manual Root Directory setting; its `startCommand` does its own `cd src/03_api_service` internally.
 3. Set `DATABASE_POOLER_URL` and `MODULE2_API_TOKEN` as Railway environment variables (Settings → Variables) — separate from the GitHub Actions secrets, Railway doesn't read those.
-4. Railway builds from `railway.json` (Nixpacks) and runs the start command automatically on every push to `main`.
+4. Railway builds from `railway.json` (Nixpacks, explicit `pip install -r requirements.txt`) and runs the start command automatically on every push to `main`.
 5. See `docs/API_CONTRACT_MODULE2.md` for the response shape the frontend session should expect.

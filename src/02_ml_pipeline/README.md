@@ -22,15 +22,15 @@ sanity checks.
 
 ---
 
-## Setup
+## Runs via CI, not locally
+
+`.github/workflows/pipeline.yml` runs all four steps below on every push to
+`main`, and on demand from the Actions tab. There's no need to run this on
+your own machine — the commands are shown here for reference/debugging, not
+as the normal way to operate this.
 
 ```bash
-pip install -r requirements-ml.txt   # separate from root requirements.txt
-```
-
-## Running
-
-```bash
+pip install -r requirements.txt
 python src/02_ml_pipeline/bronze_ingest.py --dataset stead      # needs network access
 python src/02_ml_pipeline/silver_clean.py --dataset stead
 python src/02_ml_pipeline/gold_label_split.py --dataset stead
@@ -48,12 +48,9 @@ work without network access. `test_split_leakage.py` includes a test that
 deliberately breaks a split and asserts the check catches it — not just that
 the check exists.
 
-## Isolation from the existing ingestion pipeline
+## Naming note
 
-This directory, `requirements-ml.txt`, and `config_vibration.yaml` are
-entirely additive — nothing in `src/01_data_ingestion/`, `requirements.txt`,
-or `config.yaml` was modified to build this. `vibration_classified_events`
-(this module's output table) is a separate table from the existing
-`seismic_events` (raw USGS catalog) — see the header comment in
-`data/schema/02_vibration_intelligence.sql` for why they're different
-concepts despite the name similarity.
+`vibration_classified_events` (this module's output table, in terrawatchapp's
+Supabase project) is unrelated to that project's other `seismic-*` model
+(`seismic-insar`, satellite InSAR deformation) — see the header comment in
+`data/schema/0049_vibration_classified_events.sql` for the full distinction.

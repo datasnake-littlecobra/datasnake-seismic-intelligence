@@ -18,10 +18,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: requirements-ml.txt
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements-ml.txt pytest
+        run: pip install -r requirements.txt pytest
 
       - name: Run pipeline tests
         run: pytest src/02_ml_pipeline/tests -v

@@ -5,15 +5,17 @@ that's silver_clean.py and gold_label_split.py. This script's only job is
 "pull a known-good sample and record exactly what was pulled" (manifest.py).
 
 NOTE ON EXECUTION ENVIRONMENT: this script needs outbound network access to
-SeisBench's data mirrors (zenodo.org / huggingface.co). It cannot run inside
-a network-restricted sandbox — run it wherever notebooks normally execute
-(local machine, Colab, etc.), not inside a locked-down CI/agent environment.
+SeisBench's data mirrors (zenodo.org / huggingface.co). It runs via
+.github/workflows/pipeline.yml on GitHub-hosted runners, which have normal
+outbound access — it will NOT run inside a network-restricted sandbox
+(the environment this was originally built in had no such access, which is
+why this moved to CI instead of staying a manual/local step).
 
 NOTE ON SEISBENCH API: SeisBench's exact dataset class name for INSTANCE has
 changed across versions (e.g. InstanceCountsCombined / InstanceGM / InstanceNoise
 in more recent releases vs. a single InstanceCounts class in older ones). Verify
 the class name against `import seisbench.data as sbd; dir(sbd)` for whatever
-seisbench==0.7.0 (pinned in requirements-ml.txt) actually ships, before relying
+seisbench==0.7.0 (pinned in requirements.txt) actually ships, before relying
 on the exact name used below.
 """
 

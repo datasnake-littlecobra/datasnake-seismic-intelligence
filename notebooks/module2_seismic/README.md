@@ -8,14 +8,20 @@ testable, reusable outside a notebook), not hidden in cells.
 
 ---
 
-## Prerequisites
+## These are for interactive/EDA use — not how the pipeline normally runs
+
+The pipeline itself runs automatically via `.github/workflows/pipeline.yml`
+on every push to `main` and on demand from the Actions tab — no local setup
+needed for normal operation. These notebooks exist for visual sanity checks
+and one-off exploration, mirroring the same scripts CI runs.
+
+## Prerequisites (only if running a notebook yourself)
 
 1. **Full outbound network access.** These notebooks pull data from
    SeisBench's mirrors (zenodo.org / huggingface.co). They will NOT run
    inside a network-restricted sandbox — run them on your own machine,
    Colab, or wherever you normally run Jupyter.
-2. `pip install -r requirements-ml.txt` (separate from the root
-   `requirements.txt` — see that file's header comment for why).
+2. `pip install -r requirements.txt`
 3. `.env` with `DATABASE_URL` set (only needed from `03_gold_label_split.ipynb`
    onward, if you want to write real rows via `replay_pipeline.py`).
 

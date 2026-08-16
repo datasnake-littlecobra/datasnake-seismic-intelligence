@@ -1,15 +1,11 @@
 name: Tests
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
-  workflow_call: {} # lets pipeline.yml depend on this passing before it writes to the database
-
-concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call: {} # pipeline.yml calls this on every push to main, instead of
+                     # this workflow also listening for push directly — avoids
+                     # two runs of the same tests racing/cancelling each other
 
 jobs:
   test:

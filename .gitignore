@@ -1,0 +1,28 @@
+# Secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Raw/intermediate pipeline data — handled by data/module2_vibration/.gitignore
+# (kept there, not here, so it can keep .gitkeep placeholders while still
+# ignoring real pipeline output; a blanket rule here would shadow that)
+
+# Model weights (metadata.json is committed, weights are not)
+models/registry/*/weights/
+
+# Logs
+logs/
+*.log
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

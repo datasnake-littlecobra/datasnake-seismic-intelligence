@@ -1,0 +1,16 @@
+# Raw and intermediate waveform data is never committed — STEAD/INSTANCE
+# full-size are ~130GB/~330GB, and even the prototype sample isn't meant to
+# live in git. Manifests (small JSON, versioned) ARE committed — see
+# src/02_ml_pipeline/manifest.py.
+bronze/*
+silver/*
+gold/*
+!bronze/.gitkeep
+!silver/.gitkeep
+!gold/.gitkeep
+
+*.h5
+*.hdf5
+*.mseed
+*.npy
+*.npz

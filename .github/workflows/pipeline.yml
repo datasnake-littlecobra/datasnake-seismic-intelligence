@@ -1,0 +1,77 @@
+name: Data Pipeline
+
+# Runs the full bronze -> silver -> gold -> replay pipeline and writes
+# classified events into Supabase. Triggers on every push to main (cheap
+# enough at the current ~2000-row prototype sample size — see
+# config_vibration.yaml) and on-demand via the Actions tab ("Run workflow").
+# Revisit toward a scheduled/manual-only trigger once real full-size
+# datasets or live sensor data are in play — see docs/MODULE2_ARCHITECTURE.md.
+#
+# GitHub-hosted runners have normal outbound internet access, unlike the
+# dev sandbox this pipeline was originally built in — that's the whole
+# reason this runs here instead of requiring a local machine.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Which dataset(s) to run"
+        required: false
+        default: "both"
+        type: choice
+        options: ["both", "stead", "instance"]
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false # never cancel a run mid-write to the database
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  run-pipeline:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_POOLER_URL: ${{ secrets.DATABASE_POOLER_URL }}
+    strategy:
+      matrix:
+        dataset: ${{ (github.event.inputs.dataset == 'stead' && fromJSON('["stead"]')) || (github.event.inputs.dataset == 'instance' && fromJSON('["instance"]')) || fromJSON('["stead", "instance"]') }}
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-ml.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-ml.txt
+
+      - name: Bronze — pull sample via SeisBench
+        run: python src/02_ml_pipeline/bronze_ingest.py --dataset ${{ matrix.dataset }}
+
+      - name: Silver — filter, normalize, window
+        run: python src/02_ml_pipeline/silver_clean.py --dataset ${{ matrix.dataset }}
+
+      - name: Gold — label, split
+        run: python src/02_ml_pipeline/gold_label_split.py --dataset ${{ matrix.dataset }}
+
+      - name: Replay — classify + upsert into Supabase
+        run: python src/02_ml_pipeline/replay_pipeline.py --dataset ${{ matrix.dataset }}
+
+      - name: Upload manifests + gold-layer metadata as build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-output-${{ matrix.dataset }}
+          path: |
+            data/module2_vibration/manifests/
+            data/module2_vibration/gold/*.csv
+          retention-days: 30

@@ -51,6 +51,7 @@ curl -H "x-api-token: $MODULE2_API_TOKEN" http://localhost:8000/events
 ## Deploy to Railway
 
 1. Connect this GitHub repo to a new Railway project (railway.app dashboard — no CLI/SSH required, matches the "manageable from a phone" requirement).
-2. Set `DATABASE_POOLER_URL` and `MODULE2_API_TOKEN` as Railway environment variables.
-3. Railway builds from `railway.json` (Nixpacks) and runs the start command automatically on every push to `main`.
-4. See `docs/API_CONTRACT_MODULE2.md` for the response shape the frontend session should expect.
+2. **Set the service's Root Directory to `src/03_api_service`** — Railway → your service → Settings → Source → Root Directory. This is where `railway.json` actually lives, and its `startCommand` assumes it's already running from this directory (no `cd` in it).
+3. Set `DATABASE_POOLER_URL` and `MODULE2_API_TOKEN` as Railway environment variables (Settings → Variables) — separate from the GitHub Actions secrets, Railway doesn't read those.
+4. Railway builds from `railway.json` (Nixpacks) and runs the start command automatically on every push to `main`.
+5. See `docs/API_CONTRACT_MODULE2.md` for the response shape the frontend session should expect.

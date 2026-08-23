@@ -8,13 +8,18 @@ datasets:
     name: "STEAD"
     license: "CC BY 4.0"
     source: "seisbench.data.STEAD"
-    sample_size: 2000        # small sample for Phase 1 prototyping, not the full ~1M-trace dataset
+    # Deliberately tiny right now (was 2000) — a prior CI run hit a 45-minute
+    # timeout on this exact download with no visibility into why, and this
+    # value may not even control download volume (see bronze_ingest.py's
+    # diagnostic logging). Starting small to observe real behavior safely
+    # before scaling up. See docs/MODULE2_ARCHITECTURE.md's troubleshooting log.
+    sample_size: 20
 
   instance:
     name: "INSTANCE"
     license: "CC BY 4.0"
     source: "seisbench.data.InstanceCounts"   # SeisBench dataset class name for INSTANCE
-    sample_size: 2000
+    sample_size: 20
 
 model:
   phase_picker: "PhaseNet"          # SeisBench pretrained model for phase-picking

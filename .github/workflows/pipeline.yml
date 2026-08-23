@@ -1,19 +1,18 @@
 name: Data Pipeline
 
 # Runs the full bronze -> silver -> gold -> replay pipeline and writes
-# classified events into Supabase. Triggers on every push to main (cheap
-# enough at the current ~2000-row prototype sample size — see
-# config_vibration.yaml) and on-demand via the Actions tab ("Run workflow").
-# Revisit toward a scheduled/manual-only trigger once real full-size
-# datasets or live sensor data are in play — see docs/MODULE2_ARCHITECTURE.md.
+# classified events into Supabase. On-demand only for now (Actions tab ->
+# "Run workflow") — a prior run on every push hit a 45-minute timeout on the
+# bronze step with the download behavior still not understood (see
+# docs/MODULE2_ARCHITECTURE.md's troubleshooting log), so this is
+# deliberately not automatic again until a run actually completes cleanly.
+# Revisit re-enabling push-triggering once that's confirmed.
 #
 # GitHub-hosted runners have normal outbound internet access, unlike the
 # dev sandbox this pipeline was originally built in — that's the whole
 # reason this runs here instead of requiring a local machine.
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       dataset:
@@ -34,7 +33,8 @@ jobs:
   run-pipeline:
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20 # shorter now the sample size is tiny (see config_vibration.yaml) —
+                         # a run taking anywhere near this long is itself a signal something's wrong
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DATABASE_POOLER_URL: ${{ secrets.DATABASE_POOLER_URL }}
@@ -54,8 +54,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Disk space before bronze ingest
+        run: df -h /
+
       - name: Bronze — pull sample via SeisBench
+        timeout-minutes: 10 # fail fast and clearly rather than repeat the earlier unexplained 45-min hang
         run: python src/02_ml_pipeline/bronze_ingest.py --dataset ${{ matrix.dataset }}
+
+      - name: Disk space after bronze ingest
+        if: always()
+        run: df -h /
 
       - name: Silver — filter, normalize, window
         run: python src/02_ml_pipeline/silver_clean.py --dataset ${{ matrix.dataset }}

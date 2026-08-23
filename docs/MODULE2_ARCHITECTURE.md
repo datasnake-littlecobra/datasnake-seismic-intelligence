@@ -1,7 +1,10 @@
 # Seismic/Vibration Intelligence — Architecture
 
-**Status:** Schema is live on the real database. CI/CD is wired: push to
-`main` runs tests, then the full pipeline, then Railway deploys the API.
+**Status:** Schema is live on the real database. FastAPI service is live on
+Railway (`/health` confirmed responding). The data pipeline itself has never
+completed a run — a first attempt hit an unexplained 45-minute timeout on
+the bronze-ingest step, so it's currently on-demand only (not push-triggered)
+while that's investigated with a much smaller sample and added diagnostics.
 Nothing in this repo requires a local machine to run.
 
 This is DataSnake's Module 2 — ground-sensor vibration classification,
@@ -39,12 +42,13 @@ terrawatchapp-beta dashboard (hyperlocalwatch.com) — separate repo, separate s
 ```
 
 **Everything above the database line runs in CI, not on anyone's laptop.**
-`.github/workflows/pipeline.yml` runs bronze → silver → gold → replay on
-every push to `main`, and on demand via the Actions tab's "Run workflow"
-button. GitHub-hosted runners have normal outbound internet access — the
-one thing a local dev sandbox this was originally built in did not have,
-which is the whole reason this had to move to CI rather than staying a
-"run the notebook yourself" step.
+`.github/workflows/pipeline.yml` runs bronze → silver → gold → replay
+on demand via the Actions tab's "Run workflow" button (deliberately not
+push-triggered right now — see Status above and the troubleshooting log).
+GitHub-hosted runners have normal outbound internet access — the one thing
+a local dev sandbox this was originally built in did not have, which is the
+whole reason this had to move to CI rather than staying a "run the notebook
+yourself" step.
 
 ---
 
@@ -53,9 +57,9 @@ which is the whole reason this had to move to CI rather than staying a
 | Stage | State |
 |---|---|
 | Database schema (`vibration_classified_events` + `model_registry` seed row) | **Live** — applied and verified against the real project |
-| Pipeline tests (`src/02_ml_pipeline/tests/`) | **Passing**, run in CI on every push |
-| Bronze/silver/gold/replay pipeline | **Wired into CI**, not yet observed completing a full run end-to-end — first push to `main` in this repo will be the first real test |
-| FastAPI service | **Built**, `railway.json` ready — deployment itself happens once the repo is connected to a Railway project (see "What you still need to do") |
+| Pipeline tests (`src/02_ml_pipeline/tests/`) | **Passing** — run via pull requests and whenever `pipeline.yml` is dispatched |
+| Bronze/silver/gold/replay pipeline | **Not yet completed a run** — hit a 45-minute timeout on bronze-ingest with the cause unconfirmed; sample size cut to 20 and diagnostic logging added, next dispatch is the real test |
+| FastAPI service | **Live on Railway**, `/health` confirmed responding |
 | Frontend surfacing on hyperlocalwatch.com | **Not started** — separate repo (`terrawatchapp-beta`), separate session, consumes `docs/API_CONTRACT_MODULE2.md` |
 
 ---
@@ -150,6 +154,33 @@ into its own table and reuse the same route shape without touching
   like `brands`, `voice_clones`, no `model_registry`). Caught via
   `select tablename from pg_tables where schemaname = 'public'` before
   anything was written. Worth re-running any time credentials change hands.
+- **Railway auto-detection needs an exact `requirements.txt` and `railway.json`
+  at repo root.** A build failed with "could not determine how to build the
+  app" because the one dependencies file was named `requirements-ml.txt`
+  (Railway's Nixpacks/Railpack only recognizes the exact name) and
+  `railway.json` lived in a subdirectory Railway never scanned without a
+  Root Directory override. Fixed by renaming the file and moving the config
+  to root with an explicit `buildCommand` — no Root Directory setting needed.
+- **Bronze-ingest hit an unexplained 45-minute timeout, cause unconfirmed.**
+  Working theory: SeisBench's dataset loader may download its full backing
+  archive on instantiation, before `.metadata.iloc[:n]` slicing happens —
+  meaning `sample_size` in `config_vibration.yaml` might not control download
+  volume at all. Mitigated (not yet proven fixed): sample size cut to 20,
+  diagnostic logging added to `bronze_ingest.py` (elapsed time + downloaded
+  size), a 10-minute per-step timeout added so a stall fails fast and
+  visibly, and the workflow un-triggered from push until a run completes
+  cleanly. Next dispatch's logs are what actually answers this.
+- **Supabase free-tier quota exceeded by a pre-existing, unrelated table,
+  not by Module 2's own data.** `measurements` (ocean/weather buoy
+  time-series, unrelated to this module) had grown to 1.6M rows / 423MB —
+  nearly the entire database. Fixed for free by deleting raw rows older
+  than 30 days (the app's own `measurements_series()` RPC never reads raw
+  rows past 36 hours anyway — it already switches to the pre-aggregated
+  `measurements_hourly` view beyond that window, so old raw rows were dead
+  weight) followed by `vacuum full measurements` to actually reclaim the
+  disk space (a plain `DELETE` does not shrink the file on its own). Dropped
+  the database from ~568MB to ~110–150MB. Reference queries for this kind of
+  investigation: `data/analysis/vibration_classified_events_queries.sql`.
 
 ---
 

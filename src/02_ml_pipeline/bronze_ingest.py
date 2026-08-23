@@ -20,6 +20,8 @@ on the exact name used below.
 """
 
 import argparse
+import shutil
+import time
 from pathlib import Path
 
 import yaml
@@ -36,10 +38,42 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
+def _dir_size_mb(path: Path) -> float:
+    """Best-effort recursive directory size, in MB. Used purely for the
+    diagnostic logging below — not load-bearing for the pipeline logic."""
+    if not path.exists():
+        return 0.0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / (1024 * 1024)
+
+
+def _log_download_diagnostics(cache_dir: Path, elapsed_sec: float) -> None:
+    """Prints exactly what SeisBench actually downloaded and how long it took.
+
+    Added because a prior CI run hit a 45-minute timeout on this exact step
+    with no visibility into why — this instrumentation exists to answer that
+    question empirically instead of guessing again. See the module docstring:
+    the working theory is that SeisBench's dataset loader downloads its full
+    backing archive on instantiation, before any `.metadata.iloc[:n]` slicing
+    happens — meaning `sample_size` in config_vibration.yaml may currently
+    have NO effect on how much gets downloaded, only on what gets used
+    afterward. This log output is what will confirm or rule that out.
+    """
+    size_mb = _dir_size_mb(cache_dir)
+    free_gb = shutil.disk_usage(cache_dir.parent if cache_dir.exists() else ROOT).free / (1024**3)
+    print(
+        f"[bronze diagnostics] cache_dir={cache_dir} downloaded={size_mb:.1f}MB "
+        f"elapsed={elapsed_sec:.1f}s free_disk={free_gb:.2f}GB"
+    )
+
+
 def pull_stead_sample(sample_size: int) -> tuple[Path, int]:
     import seisbench.data as sbd
 
-    data = sbd.STEAD(sampling_rate=100, cache=str(BRONZE_DIR / "stead_cache"))
+    cache_dir = BRONZE_DIR / "stead_cache"
+    start = time.monotonic()
+    data = sbd.STEAD(sampling_rate=100, cache=str(cache_dir))
+    _log_download_diagnostics(cache_dir, time.monotonic() - start)
+
     sample = data.metadata.iloc[:sample_size]
     out_path = BRONZE_DIR / "stead_sample_metadata.csv"
     sample.to_csv(out_path, index=False)
@@ -51,7 +85,11 @@ def pull_instance_sample(sample_size: int) -> tuple[Path, int]:
 
     # See module docstring — verify this class name against the installed
     # seisbench version before running.
-    data = sbd.InstanceCountsCombined(sampling_rate=100, cache=str(BRONZE_DIR / "instance_cache"))
+    cache_dir = BRONZE_DIR / "instance_cache"
+    start = time.monotonic()
+    data = sbd.InstanceCountsCombined(sampling_rate=100, cache=str(cache_dir))
+    _log_download_diagnostics(cache_dir, time.monotonic() - start)
+
     sample = data.metadata.iloc[:sample_size]
     out_path = BRONZE_DIR / "instance_sample_metadata.csv"
     sample.to_csv(out_path, index=False)

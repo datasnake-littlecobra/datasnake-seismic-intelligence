@@ -11,6 +11,10 @@ For the problem this is actually solving, the reasoning behind how it's
 built, and an honest read on current maturity:
 **[docs/PROBLEM_AND_APPROACH.md](docs/PROBLEM_AND_APPROACH.md)**.
 
+For what the data actually looks like at each pipeline stage, tied to the
+exact code that produces it:
+**[docs/DATA_FLOW_WALKTHROUGH.md](docs/DATA_FLOW_WALKTHROUGH.md)**.
+
 ## Layout
 
 ```

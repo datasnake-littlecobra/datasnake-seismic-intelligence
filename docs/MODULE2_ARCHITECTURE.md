@@ -1,11 +1,11 @@
 # Seismic/Vibration Intelligence — Architecture
 
 **Status:** Schema is live on the real database. FastAPI service is live on
-Railway (`/health` confirmed responding). The data pipeline itself has never
-completed a run — a first attempt hit an unexplained 45-minute timeout on
-the bronze-ingest step, so it's currently on-demand only (not push-triggered)
-while that's investigated with a much smaller sample and added diagnostics.
-Nothing in this repo requires a local machine to run.
+Railway (`/health` confirmed responding). Bronze → silver → gold has run
+successfully end to end for the first time (verified locally: 50 real STEAD
+traces → 100 labeled, split windows, zero schema/leakage/duplicate issues)
+and push-triggering is back on. Replay (the DB-write step) is the one piece
+not yet exercised against real data — needs the CI secrets confirmed set.
 
 This is DataSnake's Module 2 — ground-sensor vibration classification,
 one of four planned modules turning raw sensor/media data into classified,
@@ -21,8 +21,11 @@ old and new work.
 ## Signal path
 
 ```
-STEAD / INSTANCE (public, CC BY 4.0)
-        v  SeisBench
+data/stead_sample/ — small, real, pre-extracted STEAD sample (CC BY 4.0)
+  (25 earthquake_local + 25 noise, extracted once, locally, by hand —
+   see scripts/extract_stead_sample.py. Not a live SeisBench pull; see
+   Troubleshooting for why.)
+        v
 Bronze  (data/module2_vibration/bronze/, .gitignored — raw samples)
         v  bandpass filter, normalize, window
 Silver  (data/module2_vibration/silver/)
@@ -41,14 +44,14 @@ FastAPI service (src/03_api_service/, GET /events)
 terrawatchapp-beta dashboard (hyperlocalwatch.com) — separate repo, separate session
 ```
 
-**Everything above the database line runs in CI, not on anyone's laptop.**
-`.github/workflows/pipeline.yml` runs bronze → silver → gold → replay
-on demand via the Actions tab's "Run workflow" button (deliberately not
-push-triggered right now — see Status above and the troubleshooting log).
-GitHub-hosted runners have normal outbound internet access — the one thing
-a local dev sandbox this was originally built in did not have, which is the
-whole reason this had to move to CI rather than staying a "run the notebook
-yourself" step.
+**Everything above the database line runs in CI, not on anyone's laptop —
+one manual, one-time exception.** Extracting the small local sample
+(`scripts/extract_stead_sample.py`) has to run somewhere with enough disk
+and bandwidth to hold the full ~14GB source chunks temporarily — that step
+was done once, by hand, and its small output (`data/stead_sample/`) is
+committed to the repo. Everything downstream of that — bronze, silver,
+gold, replay — runs automatically in `.github/workflows/pipeline.yml` on
+every push to `main` and on demand.
 
 ---
 
@@ -57,8 +60,9 @@ yourself" step.
 | Stage | State |
 |---|---|
 | Database schema (`vibration_classified_events` + `model_registry` seed row) | **Live** — applied and verified against the real project |
-| Pipeline tests (`src/02_ml_pipeline/tests/`) | **Passing** — run via pull requests and whenever `pipeline.yml` is dispatched |
-| Bronze/silver/gold/replay pipeline | **Not yet completed a run** — hit a 45-minute timeout on bronze-ingest with the cause unconfirmed; sample size cut to 20 and diagnostic logging added, next dispatch is the real test |
+| Pipeline tests (`src/02_ml_pipeline/tests/`) | **Passing** |
+| Bronze/silver/gold | **Verified working end to end** against real data (50 STEAD traces -> 100 windows, zero validation issues) — the CI run is the same code, next push confirms it there too |
+| Replay (writes to Supabase) | **Not yet confirmed** — needs `DATABASE_URL`/`DATABASE_POOLER_URL` set as GitHub Actions secrets (separate from Railway's own env vars — see "What you still need to do") |
 | FastAPI service | **Live on Railway**, `/health` confirmed responding |
 | Frontend surfacing on hyperlocalwatch.com | **Not started** — separate repo (`terrawatchapp-beta`), separate session, consumes `docs/API_CONTRACT_MODULE2.md` |
 
@@ -94,8 +98,10 @@ app's existing conventions instead of standing up parallel infrastructure.
 
 ## Hosting
 
-- **Pipeline**: GitHub Actions (`.github/workflows/pipeline.yml`) — no local
-  execution, ever, by design.
+- **Pipeline**: GitHub Actions (`.github/workflows/pipeline.yml`) for
+  bronze/silver/gold/replay, by design — the one exception is the one-time,
+  by-hand local sample extraction (`scripts/extract_stead_sample.py`),
+  which needs disk/bandwidth no CI runner has for a full source download.
 - **API service**: Railway, git-triggered deploy from this repo's `main`,
   root directory `src/03_api_service` (`railway.json` already configured).
   Independent of the Vultr box running `datasnake-fastapi-router` /
@@ -161,15 +167,24 @@ into its own table and reuse the same route shape without touching
   `railway.json` lived in a subdirectory Railway never scanned without a
   Root Directory override. Fixed by renaming the file and moving the config
   to root with an explicit `buildCommand` — no Root Directory setting needed.
-- **Bronze-ingest hit an unexplained 45-minute timeout, cause unconfirmed.**
-  Working theory: SeisBench's dataset loader may download its full backing
-  archive on instantiation, before `.metadata.iloc[:n]` slicing happens —
-  meaning `sample_size` in `config_vibration.yaml` might not control download
-  volume at all. Mitigated (not yet proven fixed): sample size cut to 20,
-  diagnostic logging added to `bronze_ingest.py` (elapsed time + downloaded
-  size), a 10-minute per-step timeout added so a stall fails fast and
-  visibly, and the workflow un-triggered from push until a run completes
-  cleanly. Next dispatch's logs are what actually answers this.
+- **Resolved: SeisBench's STEAD/Iquique loaders genuinely have no
+  partial-download option.** Confirmed by an actual CI run hitting an
+  84.9GB download target regardless of `sample_size`, then verified against
+  SeisBench's own source: STEAD's loader has no `chunks` parameter and
+  always fetches the merged ~85GB file; Iquique's `_download_dataset` isn't
+  even implemented. Separately confirmed from the original source
+  (`github.com/smousavi05/STEAD`) that the dataset genuinely is split into
+  6 chunks (~14-16GB each) — SeisBench's Python loader just doesn't expose
+  that. Fix: downloaded two chunks directly from the original source (one
+  `noise`, one `earthquake_local`) on a local machine, extracted 25 examples
+  of each with `scripts/extract_stead_sample.py`, and committed the small
+  (~3.7MB) result to `data/stead_sample/`. `bronze_ingest.py` and
+  `silver_clean.py` now read from that directly — no SeisBench download
+  call anywhere in the automated path. Verified end to end: 50 real traces
+  -> 100 labeled, split windows, zero schema/leakage/duplicate issues.
+  One real gotcha this surfaced: the raw HDF5's waveform shape is
+  `(samples, channels)`, not `(channels, samples)` — transposed once in
+  `local_sample.py` so the rest of the pipeline didn't need to change.
 - **Supabase free-tier quota exceeded by a pre-existing, unrelated table,
   not by Module 2's own data.** `measurements` (ocean/weather buoy
   time-series, unrelated to this module) had grown to 1.6M rows / 423MB —

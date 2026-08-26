@@ -1,0 +1,10 @@
+{
+  "dataset_name": "STEAD",
+  "version": "v1",
+  "source_url": "data/stead_sample/ (extracted from github.com/smousavi05/STEAD)",
+  "checksum": "6e8563d0c891bd3be2d2c4a7d81f89b3e578ca34b928ebe6fcf6d4d25bf8768c",
+  "sample_count": 50,
+  "license": "CC BY 4.0",
+  "pulled_at": "2026-08-26T01:50:44.188408+00:00",
+  "pipeline_code_git_sha": "ba5af71"
+}

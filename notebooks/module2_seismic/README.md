@@ -17,13 +17,12 @@ and one-off exploration, mirroring the same scripts CI runs.
 
 ## Prerequisites (only if running a notebook yourself)
 
-1. **Full outbound network access.** These notebooks pull data from
-   SeisBench's mirrors (zenodo.org / huggingface.co). They will NOT run
-   inside a network-restricted sandbox — run them on your own machine,
-   Colab, or wherever you normally run Jupyter.
-2. `pip install -r requirements.txt`
-3. `.env` with `DATABASE_URL` set (only needed from `03_gold_label_split.ipynb`
-   onward, if you want to write real rows via `replay_pipeline.py`).
+1. `pip install -r requirements.txt` — no network access needed for bronze/
+   silver/gold; they read the small local sample at `data/stead_sample/`
+   (see `docs/MODULE2_ARCHITECTURE.md`'s troubleshooting log for why this
+   isn't a live SeisBench pull).
+2. `.env` with `DATABASE_URL` set — only needed if you want to actually
+   write rows via `replay_pipeline.py`, the one step that does need network.
 
 ---
 
@@ -35,7 +34,7 @@ jupyter notebook notebooks/module2_seismic/
 
 1. `00_dataset_licensing_check.ipynb` — records the verified STEAD/INSTANCE
    license terms. Read this first; it's the hard gate the rest depends on.
-2. `01_bronze_ingest.ipynb` — pulls a small sample via SeisBench, writes a
+2. `01_bronze_ingest.ipynb` — reads the local STEAD sample, writes a
    versioned manifest to `data/module2_vibration/manifests/`.
 3. `02_silver_clean_window.ipynb` — bandpass filter, normalize, window.
 4. `03_gold_label_split.ipynb` — labels, groups by `scenario_family_id`,

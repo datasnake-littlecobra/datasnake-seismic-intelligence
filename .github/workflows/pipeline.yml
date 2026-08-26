@@ -1,26 +1,39 @@
 name: Data Pipeline
 
 # Runs the full bronze -> silver -> gold -> replay pipeline and writes
-# classified events into Supabase. On-demand only for now (Actions tab ->
-# "Run workflow") — a prior run on every push hit a 45-minute timeout on the
-# bronze step with the download behavior still not understood (see
-# docs/MODULE2_ARCHITECTURE.md's troubleshooting log), so this is
-# deliberately not automatic again until a run actually completes cleanly.
-# Revisit re-enabling push-triggering once that's confirmed.
+# classified events into Supabase. Triggers on every push to main and
+# on-demand via the Actions tab ("Run workflow").
+#
+# Bronze/silver now read a small, real, pre-extracted local sample
+# (data/stead_sample/, see scripts/extract_stead_sample.py) instead of
+# pulling live via SeisBench — SeisBench's own STEAD/Iquique loaders
+# require an all-or-nothing multi-GB download with no partial-fetch
+# option, confirmed not viable here by an actual CI run that hit an
+# 84.9GB download target and timed out. See
+# docs/MODULE2_ARCHITECTURE.md's troubleshooting log for the full story.
+# This is why push-triggering was disabled for a while and is now back on.
+#
+# INSTANCE has no local sample extracted yet (only STEAD does) — default
+# dataset is "stead" only until that's done; requesting "instance" via
+# workflow_dispatch will fail with a clear error, not a silent no-op.
 #
 # GitHub-hosted runners have normal outbound internet access, unlike the
 # dev sandbox this pipeline was originally built in — that's the whole
-# reason this runs here instead of requiring a local machine.
+# reason this runs here instead of requiring a local machine (the
+# database write specifically still needs that real network access; the
+# bronze/silver/gold stages no longer do, now that they're local-file-based).
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       dataset:
         description: "Which dataset(s) to run"
         required: false
-        default: "both"
+        default: "stead"
         type: choice
-        options: ["both", "stead", "instance"]
+        options: ["stead", "instance", "both"]
 
 concurrency:
   group: pipeline-${{ github.ref }}
@@ -33,14 +46,13 @@ jobs:
   run-pipeline:
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # shorter now the sample size is tiny (see config_vibration.yaml) —
-                         # a run taking anywhere near this long is itself a signal something's wrong
+    timeout-minutes: 15
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DATABASE_POOLER_URL: ${{ secrets.DATABASE_POOLER_URL }}
     strategy:
       matrix:
-        dataset: ${{ (github.event.inputs.dataset == 'stead' && fromJSON('["stead"]')) || (github.event.inputs.dataset == 'instance' && fromJSON('["instance"]')) || fromJSON('["stead", "instance"]') }}
+        dataset: ${{ (github.event.inputs.dataset == 'instance' && fromJSON('["instance"]')) || (github.event.inputs.dataset == 'both' && fromJSON('["stead", "instance"]')) || fromJSON('["stead"]') }}
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -54,16 +66,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Disk space before bronze ingest
-        run: df -h /
-
-      - name: Bronze — pull sample via SeisBench
-        timeout-minutes: 10 # fail fast and clearly rather than repeat the earlier unexplained 45-min hang
+      - name: Bronze — read local sample
         run: python src/02_ml_pipeline/bronze_ingest.py --dataset ${{ matrix.dataset }}
-
-      - name: Disk space after bronze ingest
-        if: always()
-        run: df -h /
 
       - name: Silver — filter, normalize, window
         run: python src/02_ml_pipeline/silver_clean.py --dataset ${{ matrix.dataset }}

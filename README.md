@@ -27,11 +27,12 @@ data/schema/            SQL migrations for the vibration_classified_events table
 
 ## Nothing here needs to run on your machine
 
-Tests run on every push/PR. The full pipeline (`.github/workflows/pipeline.yml`)
-runs on demand from the Actions tab — deliberately not push-triggered right
-now, while the bronze-ingest data source is still being worked out (see
-docs/MODULE2_ARCHITECTURE.md's troubleshooting log). Railway redeploys the
-API on every push to `main`. See "What you still need to do" in
+Push to `main` and GitHub Actions runs the tests, then the pipeline
+(`.github/workflows/pipeline.yml`), end to end — also runnable on demand
+from the Actions tab. Bronze/silver/gold read a small, real, pre-extracted
+local sample rather than pulling live (see docs/MODULE2_ARCHITECTURE.md's
+troubleshooting log for why). Railway redeploys the API on every push to
+`main`. See "What you still need to do" in
 [docs/MODULE2_ARCHITECTURE.md](docs/MODULE2_ARCHITECTURE.md) for the two
 one-time dashboard setup steps (repo secrets, Railway connection) that
 can't be done from a coding session.

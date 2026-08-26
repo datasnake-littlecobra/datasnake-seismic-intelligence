@@ -14,6 +14,8 @@ import pandas as pd
 import yaml
 from scipy.signal import butter, sosfiltfilt
 
+import local_sample
+
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config_vibration.yaml"
 BRONZE_DIR = ROOT / "data" / "module2_vibration" / "bronze"
@@ -61,9 +63,13 @@ def run(dataset: str) -> Path:
     """Reads bronze-layer sample metadata, filters/normalizes/windows each trace,
     writes one row per window to the silver layer.
 
-    Requires the actual waveform arrays behind the bronze-layer sample (not just
-    the metadata CSV bronze_ingest.py writes) — load them via the same SeisBench
-    dataset object bronze_ingest.py used, keyed by the metadata's trace index.
+    Requires the actual waveform arrays behind the bronze-layer sample (not
+    just the metadata CSV bronze_ingest.py writes) — looked up by trace_name
+    from the same local sample file bronze_ingest.py reads its metadata from
+    (see local_sample.py). Previously this re-instantiated a full SeisBench
+    dataset object independently of bronze_ingest.py, which meant fixing
+    bronze_ingest.py alone wouldn't have stopped this file from separately
+    triggering the same all-or-nothing multi-GB download.
     """
     cfg = load_config()
     bronze_meta_path = BRONZE_DIR / f"{dataset}_sample_metadata.csv"
@@ -78,13 +84,8 @@ def run(dataset: str) -> Path:
     silver_rows = []
     windows_out = []
 
-    import seisbench.data as sbd
-
-    sb_dataset_cls = sbd.STEAD if dataset == "stead" else sbd.InstanceCountsCombined
-    sb_data = sb_dataset_cls(sampling_rate=sampling_rate_hz, cache=str(BRONZE_DIR / f"{dataset}_cache"))
-
     for idx in meta.index:
-        trace = sb_data.get_waveforms(idx)
+        trace = local_sample.get_waveform(dataset, meta.loc[idx, "trace_name"])
         windows = process_trace(trace, sampling_rate_hz, window_length_sec)
         for w_i, window in enumerate(windows):
             window_id = f"{dataset}_{idx}_{w_i}"

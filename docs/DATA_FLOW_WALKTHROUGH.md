@@ -43,14 +43,16 @@ records exactly what was pulled (a manifest — checksum, count, license,
 timestamp) for lineage. No filtering, no labeling here on purpose — bronze
 is "as received."
 
-**Relevant code**: `pull_stead_sample()` — instantiates the dataset,
-takes the first N metadata rows (`.iloc[:sample_size]`), writes them to
-`stead_sample_metadata.csv`.
+**Relevant code**: `pull_sample()` — reads the small local sample
+(`data/stead_sample/`, see `local_sample.py`), takes the first N metadata
+rows (`.iloc[:sample_size]`), writes them to `stead_sample_metadata.csv`.
 
-**Shape after this stage**: a small metadata CSV (the table above, N rows)
-+ (once wired correctly — see "the SeisBench problem" below) the matching
-raw waveform arrays, one 3×6000-sample array per trace (3 channels ×
-60 seconds × 100Hz).
+**Shape after this stage**: a small metadata CSV (the table above, N rows).
+The matching raw waveform for each row is looked up on demand by
+`trace_name` in silver (next stage) — one array per trace, 6000 samples ×
+3 channels natively in the source file, transposed to (3 channels, 6000
+samples) by `local_sample.get_waveform()` to match the channel-first
+convention the rest of this pipeline uses (60 seconds × 100Hz per trace).
 
 ---
 

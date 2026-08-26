@@ -12,7 +12,8 @@ sanity checks.
 | File | Purpose |
 |---|---|
 | `manifest.py` | Versioned dataset manifest read/write — dataset lineage/reproducibility |
-| `bronze_ingest.py` | Pull a small STEAD/INSTANCE sample via SeisBench |
+| `local_sample.py` | Shared reader for `data/<dataset>_sample/` — the small, real, pre-extracted samples this pipeline actually runs against |
+| `bronze_ingest.py` | Read the local STEAD sample (not a live SeisBench pull — see `docs/MODULE2_ARCHITECTURE.md`'s troubleshooting log for why) |
 | `silver_clean.py` | Bandpass filter, normalize, window |
 | `gold_label_split.py` | Label, group by `scenario_family_id`, split train/val/test |
 | `validate.py` | Pipeline-level checks: schema, split leakage, duplicates |
@@ -31,11 +32,14 @@ as the normal way to operate this.
 
 ```bash
 pip install -r requirements.txt
-python src/02_ml_pipeline/bronze_ingest.py --dataset stead      # needs network access
+python src/02_ml_pipeline/bronze_ingest.py --dataset stead      # reads data/stead_sample/, no network needed
 python src/02_ml_pipeline/silver_clean.py --dataset stead
 python src/02_ml_pipeline/gold_label_split.py --dataset stead
-python src/02_ml_pipeline/replay_pipeline.py --dataset stead    # needs DATABASE_URL
+python src/02_ml_pipeline/replay_pipeline.py --dataset stead    # needs DATABASE_URL — the one step that does need network
 ```
+
+Verified working end to end against the real local sample: 50 STEAD traces
+in, 100 labeled/split windows out, zero schema/leakage/duplicate issues.
 
 ## Tests
 
@@ -43,10 +47,10 @@ python src/02_ml_pipeline/replay_pipeline.py --dataset stead    # needs DATABASE
 pytest src/02_ml_pipeline/tests/ -v
 ```
 
-These run against synthetic fixtures, not real STEAD/INSTANCE data, so they
-work without network access. `test_split_leakage.py` includes a test that
-deliberately breaks a split and asserts the check catches it — not just that
-the check exists.
+These run against synthetic fixtures, not the real local sample, so they
+work without any data files present. `test_split_leakage.py` includes a
+test that deliberately breaks a split and asserts the check catches it —
+not just that the check exists.
 
 ## Naming note
 

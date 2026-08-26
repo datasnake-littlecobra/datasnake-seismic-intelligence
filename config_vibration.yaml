@@ -7,18 +7,24 @@ datasets:
   stead:
     name: "STEAD"
     license: "CC BY 4.0"
-    source: "seisbench.data.STEAD"
-    # Deliberately tiny right now (was 2000) — a prior CI run hit a 45-minute
-    # timeout on this exact download with no visibility into why, and this
-    # value may not even control download volume (see bronze_ingest.py's
-    # diagnostic logging). Starting small to observe real behavior safely
-    # before scaling up. See docs/MODULE2_ARCHITECTURE.md's troubleshooting log.
-    sample_size: 20
+    # Not a live SeisBench pull — SeisBench's STEAD loader requires an
+    # all-or-nothing ~85GB download with no partial-fetch option (confirmed
+    # by an actual CI run hitting that exact download target regardless of
+    # sample_size, and by reading SeisBench's own source). This points at a
+    # small, real, licensed sample extracted once, locally, by hand, via
+    # scripts/extract_stead_sample.py. See data/stead_sample/ and
+    # docs/MODULE2_ARCHITECTURE.md's troubleshooting log for the full story.
+    source: "data/stead_sample/ (extracted from github.com/smousavi05/STEAD)"
+    sample_size: 50   # everything currently extracted — 25 earthquake_local + 25 noise
 
   instance:
     name: "INSTANCE"
     license: "CC BY 4.0"
     source: "seisbench.data.InstanceCounts"   # SeisBench dataset class name for INSTANCE
+    # NOT YET AVAILABLE: no local sample has been extracted for INSTANCE the
+    # way STEAD's was — running bronze_ingest.py --dataset instance will
+    # fail with a clear FileNotFoundError until that's done (same
+    # extraction approach as STEAD, a different source dataset).
     sample_size: 20
 
 model:

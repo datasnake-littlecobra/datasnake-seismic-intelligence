@@ -102,11 +102,18 @@ def classify_window(row: pd.Series) -> dict:
     Slice 6 (models/registry/<name>/metadata.json) once available — this
     function is the seam between the pipeline and the model, kept isolated
     so swapping the model implementation doesn't touch the DB-write logic.
+
+    model_version is reported here rather than hardcoded in run()/
+    upsert_events() specifically so that once a real model is wired in,
+    its actual registry version flows through from this one place —
+    "stub-no-model-v0" is an honest label, not a real model identifier,
+    since nothing here calls a model yet.
     """
     return {
         "event_type": row["event_type"],
         "confidence": 0.0,  # replace with real model output
         "severity_score": None,
+        "model_version": "stub-no-model-v0",
         "abstain": True,  # abstain until a real model is wired in here
         "requires_human_review": True,
     }
@@ -117,7 +124,7 @@ def upsert_events(conn: psycopg2.extensions.connection, rows: list[dict], pipeli
         INSERT INTO vibration_classified_events (
             event_id, sensor_id, event_time, event_type, confidence, severity_score,
             scenario_family_id, raw_waveform_ref, split, source_dataset,
-            data_version, pipeline_run_id, evidence, abstain, requires_human_review
+            data_version, model_version, pipeline_run_id, evidence, abstain, requires_human_review
         ) VALUES %s
         ON CONFLICT (event_id) DO UPDATE SET
             confidence = EXCLUDED.confidence,
@@ -139,6 +146,7 @@ def upsert_events(conn: psycopg2.extensions.connection, rows: list[dict], pipeli
             r["split"],
             r["source_dataset"],
             r["data_version"],
+            r["model_version"],
             pipeline_run_id,
             json.dumps(r["evidence"]),
             r["abstain"],
@@ -176,6 +184,7 @@ def run(dataset: str, data_version: str = "v1") -> int:
                 "split": row["split"],
                 "source_dataset": row["source_dataset"],
                 "data_version": data_version,
+                "model_version": classification["model_version"],
                 "evidence": {"window_id": row["window_id"], "source_idx": int(row["source_idx"])},
                 "abstain": classification["abstain"],
                 "requires_human_review": classification["requires_human_review"],

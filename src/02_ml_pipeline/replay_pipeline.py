@@ -47,9 +47,46 @@ log = logging.getLogger(__name__)
 
 
 def get_connection() -> psycopg2.extensions.connection:
+    """Prefers individual DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD env vars
+    over a single DATABASE_URL string, when the individual ones are present.
+
+    Why: a password containing special characters (e.g. '@') breaks a
+    pre-assembled connection-string URL unless it's percent-encoded by
+    whoever sets it — an easy, easy-to-miss mistake (hit for real: a
+    literal '@' in the password got parsed as part of the hostname,
+    producing a "could not translate host name" error that had nothing to
+    do with the actual hostname). Passing the password to psycopg2 as its
+    own keyword argument sidesteps URL-encoding entirely — psycopg2 treats
+    it as an opaque credential, not something needing escaping — so this
+    class of bug can't recur for anyone using the individual vars.
+
+    DATABASE_URL is still supported as a fallback for anyone who already
+    has a correctly-encoded one.
+    """
+    host = os.getenv("DB_HOST")
+    password = os.getenv("DB_PASSWORD")
+    user = os.getenv("DB_USER")
+    if host and password and user:
+        # No default for DB_USER: Supabase's pooler requires the project-ref
+        # suffix (e.g. "postgres.abcdefgh"), not plain "postgres" — a silent
+        # default here would produce a wrong-but-plausible-looking value
+        # instead of a clear error.
+        return psycopg2.connect(
+            host=host,
+            port=os.getenv("DB_PORT", "6543"),
+            dbname=os.getenv("DB_NAME", "postgres"),
+            user=user,
+            password=password,
+        )
+
     url = os.getenv("DATABASE_URL")
     if not url:
-        raise RuntimeError("DATABASE_URL not set — see .env.example")
+        raise RuntimeError(
+            "Neither DB_HOST+DB_USER+DB_PASSWORD nor DATABASE_URL is set — "
+            "see .env.example. Prefer the individual DB_* variables: they "
+            "avoid needing to percent-encode special characters in the "
+            "password by hand."
+        )
     return psycopg2.connect(url)
 
 

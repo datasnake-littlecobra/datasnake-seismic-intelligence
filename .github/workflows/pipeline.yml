@@ -48,6 +48,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
+      # Preferred: individual pieces, so a password with special characters
+      # (e.g. '@') never needs manual percent-encoding — see .env.example
+      # and replay_pipeline.py's get_connection() for why this matters.
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      # Fallback, only used if the DB_* secrets above aren't set.
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DATABASE_POOLER_URL: ${{ secrets.DATABASE_POOLER_URL }}
     strategy:

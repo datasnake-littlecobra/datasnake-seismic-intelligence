@@ -119,14 +119,22 @@ need a human clicking through a dashboard, since neither can be done from
 a coding session:
 
 1. **Add repo secrets** — GitHub repo → Settings → Secrets and variables →
-   Actions → add `DATABASE_URL` and `DATABASE_POOLER_URL` (the terrawatchapp
-   Supabase pooler connection string, port 6543). Without these,
+   Actions → add `DB_HOST`, `DB_PORT` (6543), `DB_NAME` (postgres), `DB_USER`
+   (the pooler username, e.g. `postgres.YOURREF`), and `DB_PASSWORD` — the
+   individual pieces, **not** a pre-assembled `DATABASE_URL` string. This
+   matters: a password with special characters (e.g. `@`) breaks a
+   pre-assembled URL unless it's percent-encoded by hand, which is exactly
+   what happened the first time this was set up (surfaced as a confusing
+   "could not translate host name" error). The individual-pieces form
+   sidesteps that entirely — see `.env.example` and `replay_pipeline.py`'s
+   `get_connection()` for the full reasoning. Without these,
    `pipeline.yml` will fail at the replay step.
 2. **Connect this repo to a Railway project** — Railway dashboard → New
    Project → Deploy from GitHub repo → pick `datasnake-seismic-intelligence`
-   → set root directory to `src/03_api_service`. Add `DATABASE_POOLER_URL`
-   and `MODULE2_API_TOKEN` as Railway environment variables too (Railway
-   doesn't read GitHub Actions secrets — they're separate stores).
+   → set root directory to `src/03_api_service`. Add the same `DB_HOST`/
+   `DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` and `MODULE2_API_TOKEN` as
+   Railway environment variables too (Railway doesn't read GitHub Actions
+   secrets — they're separate stores).
 
 ---
 
@@ -145,6 +153,20 @@ into its own table and reuse the same route shape without touching
 
 ## Troubleshooting log
 
+- **An unencoded `@` in the database password broke connections with a
+  misleading error.** First real CI attempt at the replay step failed with
+  `could not translate host name "t@sn@ke_1990@aws-...pooler.supabase.com"
+  to address` — nothing wrong with the hostname; the password's literal
+  `@` characters got parsed as part of the host once concatenated into one
+  connection-string secret. Fixed at the code level, not just by re-encoding
+  the one secret: `get_connection()` (pipeline) and `get_database_url()`
+  (API service) now prefer individual `DB_HOST`/`DB_PORT`/`DB_NAME`/
+  `DB_USER`/`DB_PASSWORD` env vars, connecting via psycopg2 keyword
+  arguments / `sqlalchemy.engine.URL.create()` respectively — both handle
+  the password as an opaque value or auto-encode it, so this can't recur
+  for anyone using the individual vars going forward. `DATABASE_URL` /
+  `DATABASE_POOLER_URL` remain supported as a fallback, with a clear
+  warning that they require manual percent-encoding.
 - **Direct Postgres host resolves IPv6-only.** `db.<ref>.supabase.co:5432`
   has no IPv4 address unless the project has the IPv4 add-on. Use the
   **transaction pooler** host instead (`aws-<n>-<region>.pooler.supabase.com:6543`

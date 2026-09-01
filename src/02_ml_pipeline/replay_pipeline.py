@@ -10,6 +10,19 @@ elsewhere in this repo's ingestion scripts (usgs_seismic.py's
 
 Follows this repo's existing DB-connection convention (see
 src/01_data_ingestion/usgs_seismic.py) rather than introducing a new one.
+
+MODEL: classify_window() below calls SeisBench's pretrained PhaseNet for
+real (Stage 1 of docs/MODEL_STRATEGY.md's two-stage plan) — it is no longer
+a stub. Loading the pretrained weights requires downloading them from
+SeisBench's remote repository; that download is reachable from GitHub
+Actions runners but blocked by this project's dev sandbox's network policy
+(confirmed directly — the same class of restriction already documented for
+STEAD/Iquique in docs/MODULE2_ARCHITECTURE.md's troubleshooting log, not a
+new problem). The forward-pass logic and the preprocessing it depends on
+were verified locally against a real window from data/stead_sample/ using
+an untrained model instance (no download needed for that — see
+classify_window()'s docstring for exactly what was and wasn't verified
+this way) before being wired in here.
 """
 
 import argparse
@@ -19,11 +32,14 @@ import logging
 import os
 import sys
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import psycopg2
 import psycopg2.extras
+import torch
 import yaml
 from dotenv import load_dotenv
 
@@ -34,6 +50,7 @@ with open(ROOT / "config_vibration.yaml") as f:
     CFG = yaml.safe_load(f)
 
 GOLD_DIR = ROOT / "data" / "module2_vibration" / "gold"
+SILVER_DIR = ROOT / "data" / "module2_vibration" / "silver"
 
 log_cfg = CFG["logging"]
 Path("logs").mkdir(exist_ok=True)
@@ -97,25 +114,130 @@ def deterministic_event_id(dataset: str, window_id: str) -> str:
     return str(uuid.UUID(digest))
 
 
-def classify_window(row: pd.Series) -> dict:
-    """Placeholder classification call. Wire this to the trained model from
-    Slice 6 (models/registry/<name>/metadata.json) once available — this
-    function is the seam between the pipeline and the model, kept isolated
-    so swapping the model implementation doesn't touch the DB-write logic.
+@lru_cache(maxsize=None)
+def _load_silver_windows(dataset: str) -> np.lib.npyio.NpzFile:
+    """Loads (and caches, once per dataset per process) the silver-layer
+    window arrays classify_window() needs — the gold CSV alone only has
+    labels/splits/ids, not the actual waveform. Cached so a 50+ row replay
+    run opens this file once, not once per row."""
+    path = SILVER_DIR / f"{dataset}_silver_windows.npz"
+    if not path.exists():
+        raise FileNotFoundError(f"Run silver_clean.py --dataset {dataset} first")
+    return np.load(path)
 
-    model_version is reported here rather than hardcoded in run()/
-    upsert_events() specifically so that once a real model is wired in,
-    its actual registry version flows through from this one place —
-    "stub-no-model-v0" is an honest label, not a real model identifier,
-    since nothing here calls a model yet.
+
+@lru_cache(maxsize=1)
+def _load_model():
+    """Loads SeisBench's pretrained PhaseNet once per process. Deliberately
+    lazy — only called from inside classify_window(), never at import time
+    — so merely importing this module (e.g. from a test) never triggers a
+    multi-MB weight download.
+
+    "stead" here names which published, pretrained WEIGHT FILE to fetch —
+    not a claim that STEAD itself is a trained model. See
+    docs/MODEL_STRATEGY.md for the full explanation (written after this
+    exact question came up for real).
     """
+    import seisbench.models as sbm
+
+    model = sbm.PhaseNet.from_pretrained("stead")
+    model.eval()
+    return model
+
+
+def _phasenet_normalize(window: np.ndarray) -> np.ndarray:
+    """Reproduces PhaseNet's own pre-inference normalization — its
+    `annotate_batch_pre` under `norm="std"` (the pretrained "stead"
+    weights' default): per-channel mean-subtract, then divide by
+    per-channel std (+1e-10 to avoid a divide-by-zero on a dead channel).
+
+    Silver-layer windows are already peak-normalized (unit max-abs) by
+    silver_clean.py's normalize(), for reasons unrelated to any one model.
+    That doesn't need undoing first: a z-score is invariant to any prior
+    positive-scalar rescaling of the input, so running this on the
+    already peak-normalized window produces the exact same result PhaseNet
+    would compute from the raw trace itself.
+    """
+    mean = window.mean(axis=-1, keepdims=True)
+    std = window.std(axis=-1, keepdims=True)
+    return (window - mean) / (std + 1e-10)
+
+
+def classify_window(dataset: str, row: pd.Series) -> dict:
+    """Runs SeisBench's pretrained PhaseNet on this window's real waveform
+    and derives a window-level classification from its output — this is
+    the seam between the pipeline and the model, kept isolated so a future
+    fine-tuned/custom model (Stage 2 of docs/MODEL_STRATEGY.md) only needs
+    to change what happens inside this function.
+
+    WHY A DIRECT FORWARD PASS, NOT model.classify()/model.annotate():
+    verified directly against a real seisbench==0.7.0 install (the version
+    pinned in requirements.txt) — not assumed — that `classify()` expects
+    an obspy.Stream and returns a ClassifyOutput exposing `.picks` (a list
+    of arrival picks: phase, time, peak value), with no `event_type`,
+    `confidence`, or `severity_score` attributes at all. That's a
+    different, wrong interface than what an earlier speculative version of
+    this code (and of app/modules/seismic/classify.py) assumed. Calling
+    the model's forward pass directly on our already-filtered,
+    already-windowed (channels, samples) array sidesteps needing to wrap
+    our data in an obspy Stream, and was confirmed to work correctly on a
+    real (3, 3000) window from data/stead_sample/ using an untrained
+    PhaseNet instance (no weight download needed to check this — the
+    interface and array shapes don't depend on which weights are loaded)
+    — output shape (batch, 3, time), channels ordered N/P/S per the
+    model's own `labels` attribute ("NPS"), confirmed the same way.
+
+    WHAT THIS HEURISTIC IS AND ISN'T: PhaseNet is a phase-PICKING model —
+    per timestep, it outputs a probability for Noise / P-wave / S-wave. It
+    was never trained to emit one "is this an earthquake" label per
+    window. The rule used here — "seismic" if the model's peak P or S
+    probability anywhere in the window clears `detection_threshold`,
+    "environmental" otherwise — reuses PhaseNet's own detection convention
+    (config's default of 0.3 matches SeisBench's own default pick
+    threshold) rather than inventing a new one. It structurally cannot
+    produce "vehicle_human": no dataset behind this pretrained model
+    labels that class, so there's no signal for it to have learned — see
+    gold_label_split.py's docstring and docs/MODEL_STRATEGY.md.
+
+    model_version is a fixed label identifying OUR integration (pretrained
+    "stead" weights, unmodified, no fine-tuning) — not a SeisBench-internal
+    version string, since from_pretrained("stead") always resolves to the
+    latest weights published under that name. A future fine-tuned or
+    custom-trained model should get a visibly different model_version so
+    rows produced by each are distinguishable in the database.
+    """
+    model = _load_model()
+    windows = _load_silver_windows(dataset)
+    window = windows[row["window_id"]].astype(np.float32)
+    normalized = _phasenet_normalize(window)
+
+    with torch.no_grad():
+        probs = model(torch.from_numpy(normalized).unsqueeze(0))  # (1, 3, time); channels = N, P, S
+
+    noise_score = float(probs[0, 0, :].max())
+    seismic_score = float(probs[0, 1:, :].max())  # max over P and S channels, across time
+
+    detection_threshold = CFG["model"]["detection_threshold"]
+    review_threshold = CFG["model"]["review_threshold"]
+
+    if seismic_score >= detection_threshold:
+        event_type = "seismic"
+        confidence = seismic_score
+    else:
+        event_type = "environmental"
+        confidence = noise_score
+
+    low_confidence = confidence < review_threshold
     return {
-        "event_type": row["event_type"],
-        "confidence": 0.0,  # replace with real model output
+        "event_type": event_type,
+        "confidence": confidence,
+        # Severity/magnitude estimation isn't in scope yet — no model is
+        # wired in for it. None here is an honest "not computed", not a
+        # real zero-severity claim.
         "severity_score": None,
-        "model_version": "stub-no-model-v0",
-        "abstain": True,  # abstain until a real model is wired in here
-        "requires_human_review": True,
+        "model_version": "phasenet-stead-pretrained-v1",
+        "abstain": low_confidence,
+        "requires_human_review": low_confidence,
     }
 
 
@@ -170,7 +292,7 @@ def run(dataset: str, data_version: str = "v1") -> int:
 
     rows = []
     for _, row in gold.iterrows():
-        classification = classify_window(row)
+        classification = classify_window(dataset, row)
         rows.append(
             {
                 "event_id": deterministic_event_id(dataset, row["window_id"]),

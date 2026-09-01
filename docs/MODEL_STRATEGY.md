@@ -260,8 +260,40 @@ land.
 
 ## Where this leaves `classify_window()` today
 
-Nothing in this doc has been implemented yet. `classify_window()` in
-`src/02_ml_pipeline/replay_pipeline.py` is still the stub described in
-`docs/PROBLEM_AND_APPROACH.md` and `docs/DATA_FLOW_WALKTHROUGH.md`. Stage 1
-(above) is the concrete next implementation step once there's a decision
-to proceed with it.
+**Update — Stage 1 has landed.** `classify_window()` in
+`src/02_ml_pipeline/replay_pipeline.py` now runs SeisBench's pretrained
+PhaseNet for real, instead of the stub described earlier in this doc (and
+in `docs/PROBLEM_AND_APPROACH.md`/`docs/DATA_FLOW_WALKTHROUGH.md`, both
+written before this landed).
+
+One thing worth being explicit about, surfaced while actually building
+this: the earlier plan assumed `model.classify(window)` would hand back
+something with `event_type`/`confidence`/`severity_score` attributes.
+That was never verified against the real library — and turned out to be
+wrong. Installing the exact pinned `seisbench==0.7.0` and testing it
+directly showed that `classify()` expects an `obspy.Stream`, not a raw
+array, and returns arrival **picks** (`.picks`), not those attributes at
+all. PhaseNet is a phase-*picker* — per timestep it outputs a probability
+for Noise / P-wave / S-wave, not a single "is this an earthquake" answer
+for a whole window. `classify_window()` now calls the model's forward
+pass directly on the pipeline's own preprocessed window, reproduces
+PhaseNet's own normalization first, and derives `seismic` vs.
+`environmental` from whether the model's peak P/S probability anywhere in
+the window clears a threshold (0.3, matching SeisBench's own default pick
+threshold — not an invented number). Full rationale, verified against
+real code rather than assumed, is in that function's docstring. The same
+wrong assumption existed in `app/modules/seismic/classify.py` (dead code,
+not on any request path today) and in the eval notebook — both fixed the
+same way.
+
+**What's still unverified, honestly**: SeisBench's pretrained-weight
+download is reachable from GitHub Actions but blocked by this project's
+own dev sandbox — the same category of restriction already documented for
+STEAD/Iquique's dataset downloads. Everything about the *shapes and
+interface* was verified locally (using an untrained model instance, which
+doesn't need network access, run against a real window from
+`data/stead_sample/`). What has **not** yet been verified is what the real
+trained weights actually predict on real data — that only happens the
+first time this runs in CI with real network access. Treat the next CI
+run's actual output (row counts by `event_type`, `confidence`
+distribution) as the real verification, not this implementation itself.

@@ -33,9 +33,26 @@ model:
   window_length_sec: 30
   sampling_rate_hz: 100
 
+  # PhaseNet outputs a per-timestep probability for each of N(oise)/P/S —
+  # it's a phase picker, not a purpose-built event classifier. These two
+  # thresholds are how replay_pipeline.py's classify_window() turns that
+  # into a window-level event_type + a governance decision:
+  #   - detection_threshold: minimum peak P or S probability anywhere in
+  #     the window to call it "seismic" at all. 0.3 matches SeisBench's
+  #     own default pick threshold (_annotate_args["*_threshold"]) rather
+  #     than inventing a new number.
+  #   - review_threshold: below this confidence (whichever score won),
+  #     abstain and set requires_human_review — same idea as any other
+  #     under-confident-model guardrail in this project.
+  detection_threshold: 0.3
+  review_threshold: 0.5
+
   event_types:
     - seismic
-    - vehicle_human
+    - vehicle_human   # PhaseNet cannot produce this — no dataset behind
+                        # it labels vehicle/human vibration separately.
+                        # See gold_label_split.py's docstring and
+                        # docs/MODEL_STRATEGY.md.
     - environmental
     - unknown
 

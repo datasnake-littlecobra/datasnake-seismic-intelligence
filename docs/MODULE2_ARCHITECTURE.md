@@ -1,11 +1,16 @@
 # Seismic/Vibration Intelligence — Architecture
 
 **Status:** Schema is live on the real database. FastAPI service is live on
-Railway (`/health` confirmed responding). Bronze → silver → gold has run
-successfully end to end for the first time (verified locally: 50 real STEAD
-traces → 100 labeled, split windows, zero schema/leakage/duplicate issues)
-and push-triggering is back on. Replay (the DB-write step) is the one piece
-not yet exercised against real data — needs the CI secrets confirmed set.
+Railway (`/health` confirmed responding). The full bronze → silver → gold →
+replay pipeline has run successfully end to end in real CI, writing 100 real
+rows into `vibration_classified_events` (50 real STEAD traces → 100 labeled,
+split windows, zero schema/leakage/duplicate issues). `classify_window()`
+now runs real SeisBench PhaseNet inference (Stage 1 of
+`docs/MODEL_STRATEGY.md`) instead of the earlier stub — real trained-weight
+predictions are confirmed by the next CI run, since the pretrained-weight
+download is only reachable from CI, not from a dev sandbox. See
+`docs/TECHNICAL_DEBT.md` for what's still deliberately hardcoded to
+STEAD-only assumptions.
 
 This is DataSnake's Module 2 — ground-sensor vibration classification,
 one of four planned modules turning raw sensor/media data into classified,
@@ -60,9 +65,10 @@ every push to `main` and on demand.
 | Stage | State |
 |---|---|
 | Database schema (`vibration_classified_events` + `model_registry` seed row) | **Live** — applied and verified against the real project |
-| Pipeline tests (`src/02_ml_pipeline/tests/`) | **Passing** |
-| Bronze/silver/gold | **Verified working end to end** against real data (50 STEAD traces -> 100 windows, zero validation issues) — the CI run is the same code, next push confirms it there too |
-| Replay (writes to Supabase) | **Not yet confirmed** — needs `DATABASE_URL`/`DATABASE_POOLER_URL` set as GitHub Actions secrets (separate from Railway's own env vars — see "What you still need to do") |
+| Pipeline tests (`src/02_ml_pipeline/tests/`) | **Passing** (14 tests) |
+| Bronze/silver/gold | **Verified working end to end** against real data (50 STEAD traces -> 100 windows, zero validation issues), confirmed by a real green CI run, not just locally |
+| Replay (writes to Supabase) | **Confirmed live** — a real CI run wrote 100 real rows into `vibration_classified_events` (see `data/analysis/vibration_classified_events_queries.sql` to inspect them yourself) |
+| Model (`classify_window()`) | **Real SeisBench PhaseNet wired in** (Stage 1 of `docs/MODEL_STRATEGY.md`) — interface verified locally against a real `seisbench==0.7.0` install; the pretrained-weight *download* itself is only reachable from CI, not this dev sandbox, so the real trained-weight predictions are confirmed by the next CI run's actual output, not by this implementation alone |
 | FastAPI service | **Live on Railway**, `/health` confirmed responding |
 | Frontend surfacing on hyperlocalwatch.com | **Not started** — separate repo (`terrawatchapp-beta`), separate session, consumes `docs/API_CONTRACT_MODULE2.md` |
 
@@ -114,27 +120,21 @@ app's existing conventions instead of standing up parallel infrastructure.
 
 ## What you still need to do
 
-Nothing here requires you to write or run code locally — but two things
-need a human clicking through a dashboard, since neither can be done from
-a coding session:
+Both of the one-time, dashboard-only setup steps that used to block this
+project are **done**, kept here as a record rather than deleted:
 
-1. **Add repo secrets** — GitHub repo → Settings → Secrets and variables →
-   Actions → add `DB_HOST`, `DB_PORT` (6543), `DB_NAME` (postgres), `DB_USER`
-   (the pooler username, e.g. `postgres.YOURREF`), and `DB_PASSWORD` — the
-   individual pieces, **not** a pre-assembled `DATABASE_URL` string. This
-   matters: a password with special characters (e.g. `@`) breaks a
-   pre-assembled URL unless it's percent-encoded by hand, which is exactly
-   what happened the first time this was set up (surfaced as a confusing
-   "could not translate host name" error). The individual-pieces form
-   sidesteps that entirely — see `.env.example` and `replay_pipeline.py`'s
-   `get_connection()` for the full reasoning. Without these,
-   `pipeline.yml` will fail at the replay step.
-2. **Connect this repo to a Railway project** — Railway dashboard → New
-   Project → Deploy from GitHub repo → pick `datasnake-seismic-intelligence`
-   → set root directory to `src/03_api_service`. Add the same `DB_HOST`/
-   `DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` and `MODULE2_API_TOKEN` as
-   Railway environment variables too (Railway doesn't read GitHub Actions
-   secrets — they're separate stores).
+1. ~~**Add repo secrets**~~ — done. `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/
+   `DB_PASSWORD` are set as GitHub Actions repo secrets (the individual
+   pieces, not a pre-assembled `DATABASE_URL` — see `.env.example` and
+   `replay_pipeline.py`'s `get_connection()` for why that distinction
+   mattered). Confirmed working: a real CI run wrote 100 real rows to
+   `vibration_classified_events`.
+2. ~~**Connect this repo to a Railway project**~~ — done. The FastAPI
+   service is live on Railway with `/health` confirmed responding.
+
+Nothing currently blocks this project on a dashboard click. The next real
+open item is a code one — see `docs/MODEL_STRATEGY.md`'s Stage 2, or
+`docs/TECHNICAL_DEBT.md` for what's deliberately still hardcoded.
 
 ---
 
@@ -207,6 +207,32 @@ into its own table and reuse the same route shape without touching
   One real gotcha this surfaced: the raw HDF5's waveform shape is
   `(samples, channels)`, not `(channels, samples)` — transposed once in
   `local_sample.py` so the rest of the pipeline didn't need to change.
+- **`model_version` NOT NULL violation on the first real replay write.**
+  `replay_pipeline.py`'s INSERT never included that column at all, even
+  though the schema requires it — `classify_window()` was already
+  returning it (as `"stub-no-model-v0"`), it just wasn't threaded through
+  `run()`'s row dict or `upsert_events()`'s column list/values tuple. Fixed
+  by adding it in both places and cross-checking the full schema for any
+  other NOT-NULL columns missing the same way (found none). This is the
+  fix that got the first real end-to-end run to succeed: 100 rows written
+  to `vibration_classified_events`.
+- **A speculative `model.classify(window)` call, never verified against
+  the real library, turned out to be wrong.** Both `replay_pipeline.py`'s
+  original stub docstring and `app/modules/seismic/classify.py` assumed
+  SeisBench's `classify()` would return an object with `event_type`/
+  `confidence`/`severity_score` attributes. Installing the exact pinned
+  `seisbench==0.7.0` and testing directly (Stage 1 of
+  `docs/MODEL_STRATEGY.md`) showed `classify()` actually expects an
+  `obspy.Stream`, not a raw array, and returns a `ClassifyOutput` exposing
+  `.picks` (arrival picks) — none of those attributes exist. Fixed by
+  calling PhaseNet's forward pass directly on the pipeline's own
+  preprocessed window instead, after confirming (against a real window
+  from `data/stead_sample/`, using an untrained model instance so no
+  network access was needed for this part) that a direct forward pass
+  works correctly even though the window is 3000 samples and PhaseNet's
+  nominal `in_samples` is 3001 — the model's skip-connection merges crop
+  to match, so the 1-sample difference doesn't break anything. Full
+  rationale in `classify_window()`'s docstring.
 - **Supabase free-tier quota exceeded by a pre-existing, unrelated table,
   not by Module 2's own data.** `measurements` (ocean/weather buoy
   time-series, unrelated to this module) had grown to 1.6M rows / 423MB —

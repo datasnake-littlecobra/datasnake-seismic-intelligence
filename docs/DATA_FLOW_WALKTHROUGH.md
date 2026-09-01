@@ -266,15 +266,15 @@ column-name-to-key-name, unchanged:
 | `sensor_id` | `sensor_id` | e.g. `"replay:stead"` — see schema comment on why this isn't an FK into `sensors` |
 | `event_time` | `event_time` | when the pipeline stamped this row (see caveat below) |
 | `latitude`, `longitude` | `latitude`, `longitude` | usually `null` for Phase 1 replayed data (STEAD rows aren't station-geocoded in this pipeline yet) |
-| `event_type` | `event_type` | `seismic` / `vehicle_human` / `environmental` / `unknown` |
-| `confidence` | `confidence` | `0.0` today (stub) — see `docs/MODEL_STRATEGY.md` |
-| `severity_score` | `severity_score` | `null` today (stub) |
+| `event_type` | `event_type` | `seismic` / `environmental` today (real PhaseNet output — see caveat below); `vehicle_human`/`unknown` are defined but never produced by this model |
+| `confidence` | `confidence` | PhaseNet's own peak P/S (or noise) probability for this window — see `docs/MODEL_STRATEGY.md` for exactly how |
+| `severity_score` | `severity_score` | `null` — no magnitude/severity model wired in yet, honestly reported as "not computed" |
 | `scenario_family_id` | `scenario_family_id` | e.g. `"stead_10974"` |
 | `human_summary` | `human_summary` | `null` — never populated by any current code path |
 | `source_dataset` | `source_dataset` | `"STEAD"` |
 | `evidence` | `evidence` | jsonb, e.g. `{"window_id": "stead_0_0", "source_idx": 0}` |
-| `abstain` | `abstain` | `true` for every row today |
-| `requires_human_review` | `requires_human_review` | `true` for every row today |
+| `abstain` | `abstain` | `true` when confidence is below `config_vibration.yaml`'s `model.review_threshold` (0.5) |
+| `requires_human_review` | `requires_human_review` | same condition as `abstain` |
 | `created_at` | `created_at` | row insert time — the actual real-world "when was this written" timestamp |
 
 Columns that exist on the table but are **not** in `EVENTS_QUERY`'s
@@ -374,7 +374,7 @@ file or table today — nothing in this chain is aspirational.
 | "What does this event's raw waveform actually look like?" | `data/stead_sample/stead_sample_waveforms.hdf5`, keyed by `trace_name` (via the chain above) |
 | "Why did this window get labeled `seismic`?" | `gold_label_split.py`'s `TRACE_CATEGORY_TO_EVENT_TYPE` mapping, applied to the bronze row's `trace_category` |
 | "Why is this row in `train` and not `test`?" | `gold_label_split.py`'s `split_by_family()`, keyed on `scenario_family_id` |
-| "What confidence/model produced this classification?" | `replay_pipeline.py`'s `classify_window()` — today, always the stub (see `docs/MODEL_STRATEGY.md`) |
+| "What confidence/model produced this classification?" | `replay_pipeline.py`'s `classify_window()` — real SeisBench PhaseNet inference as of Stage 1 (see `docs/MODEL_STRATEGY.md`) |
 | "Is this model any good?" | `model_registry` row where `slug = 'seismic-vibration-ground'` (joined manually, not via FK — see above) |
 | "What does the frontend actually receive for this event?" | `src/03_api_service/app/routers/events.py`'s `EVENTS_QUERY` column list (table above) |
 | "Which pipeline run wrote this row, and when?" | `vibration_classified_events.pipeline_run_id` + `created_at` — see the "Per-pipeline-run breakdown" query in `data/analysis/vibration_classified_events_queries.sql` |

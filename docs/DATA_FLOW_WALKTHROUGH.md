@@ -6,9 +6,13 @@ Companion to `docs/PROBLEM_AND_APPROACH.md` (the why) and
 written because reading a diagram of arrows between boxes isn't how this
 clicks; seeing the actual shape of the data at each step is.
 
-Illustrative example values below (clearly marked) — no successful pipeline
-run has produced real output yet (see MODULE2_ARCHITECTURE.md's status), so
-these show what the *code* produces given real input, not a captured run.
+Illustrative example values below (clearly marked) reflect the *shape* the
+code produces, not necessarily a literal captured row — though as of the
+first successful end-to-end CI run, the pipeline described here has now
+actually written 100 real rows into `vibration_classified_events` (50
+STEAD windows × their real `event_type`/`split`/`scenario_family_id`; see
+MODULE2_ARCHITECTURE.md's status for the run details, and the new section
+below for how to look those real rows up yourself).
 
 ---
 
@@ -193,3 +197,184 @@ are narrower than they might seem:
 
 See `docs/PROBLEM_AND_APPROACH.md` for the fuller Phase 2 data-ecosystem
 picture (hardware, streaming ingestion, the monitoring/feedback loop).
+
+---
+
+## Stage 5: the database and API side — where "which table connects to what" lives
+
+Everything above happens to local files (CSVs, an HDF5 file) that never
+touch a database until the very last step. This section covers what
+happens *after* `replay_pipeline.py` writes a row — the part that's easy
+to lose track of because it spans three different places: the
+`vibration_classified_events` table itself, its (non-obvious) link to
+`model_registry`, and the FastAPI service that turns a DB row into JSON.
+
+### `vibration_classified_events`: one row = one classified window
+
+Full column list is in
+`data/schema/0049_vibration_classified_events.sql`. The one thing worth
+saying plainly: **every column on this table is populated by
+`replay_pipeline.py`'s `run()` function, in one place** — there's no
+trigger, no second writer, no background job touching this table. If a
+column's value looks wrong, `replay_pipeline.py` (specifically the row
+dict built in `run()`, around line 174) is the only place to look.
+
+### The `model_registry` link: a slug, not a foreign key
+
+`vibration_classified_events` has **no `model_id` or `model_registry_id`
+column, and no foreign key to `model_registry` at all.** The two tables
+are connected only by a shared *string value* — `model_registry.slug =
+'seismic-vibration-ground'`, matched against
+`vibration_classified_events.model_version` conceptually (the actual
+model that produced a row), and against the module as a whole for catalog
+display purposes.
+
+Why this is worth calling out: it's easy to expect a real FK here and go
+looking for one. There isn't one, deliberately — `model_registry` is a
+catalog table (one row per *model*, for the `/ai-models` hub page to
+display), while `vibration_classified_events` is an event table (one row
+per *classified window*, potentially millions of rows). Joining them is a
+manual `join ... on r.slug = 'seismic-vibration-ground'` (a literal
+constant, not a stored column on either side) rather than a normal
+`join ... on e.model_id = r.id`:
+
+```sql
+-- Real query, works today (data/analysis/vibration_classified_events_queries.sql)
+select e.event_type, count(*), r.status, r.accuracy_pct
+from vibration_classified_events e
+join model_registry r on r.slug = 'seismic-vibration-ground'
+group by e.event_type, r.status, r.accuracy_pct;
+```
+
+`model_registry.status = 'demo'` and `accuracy_pct = null` for this row
+today — an honest reflection of Stage 1/2 not being wired in yet (see
+`docs/MODEL_STRATEGY.md`). Once a real model is wired in and evaluated,
+updating `accuracy_pct`/`status` on this **one row** in `model_registry`
+is a separate, manual step from anything `replay_pipeline.py` does — the
+pipeline never writes to `model_registry` itself.
+
+### FastAPI's `GET /events`: which DB column becomes which JSON field
+
+`src/03_api_service/app/routers/events.py` runs one query
+(`EVENTS_QUERY`) and returns its rows almost verbatim — there's no
+renaming, no computed fields, no hidden transformation. The mapping is
+column-name-to-key-name, unchanged:
+
+| DB column (`vibration_classified_events`) | JSON key in `GET /events` response | Notes |
+|---|---|---|
+| `event_id` | `event_id` | UUID, primary key |
+| `sensor_id` | `sensor_id` | e.g. `"replay:stead"` — see schema comment on why this isn't an FK into `sensors` |
+| `event_time` | `event_time` | when the pipeline stamped this row (see caveat below) |
+| `latitude`, `longitude` | `latitude`, `longitude` | usually `null` for Phase 1 replayed data (STEAD rows aren't station-geocoded in this pipeline yet) |
+| `event_type` | `event_type` | `seismic` / `vehicle_human` / `environmental` / `unknown` |
+| `confidence` | `confidence` | `0.0` today (stub) — see `docs/MODEL_STRATEGY.md` |
+| `severity_score` | `severity_score` | `null` today (stub) |
+| `scenario_family_id` | `scenario_family_id` | e.g. `"stead_10974"` |
+| `human_summary` | `human_summary` | `null` — never populated by any current code path |
+| `source_dataset` | `source_dataset` | `"STEAD"` |
+| `evidence` | `evidence` | jsonb, e.g. `{"window_id": "stead_0_0", "source_idx": 0}` |
+| `abstain` | `abstain` | `true` for every row today |
+| `requires_human_review` | `requires_human_review` | `true` for every row today |
+| `created_at` | `created_at` | row insert time — the actual real-world "when was this written" timestamp |
+
+Columns that exist on the table but are **not** in `EVENTS_QUERY`'s
+`SELECT` and so never appear in the API response at all:
+`raw_waveform_ref`, `split`, `data_version`, `model_version`,
+`pipeline_run_id`, `review_notes`, `location`. If you need any of these
+for a frontend feature, that's a one-line addition to `EVENTS_QUERY` and
+`EVENT_BY_ID_QUERY` in `events.py` — not a schema change.
+
+**Caveat on `event_time` worth knowing**: `run()` in `replay_pipeline.py`
+sets `event_time` to `pd.Timestamp.utcnow()` at pipeline-run time (line
+178) — it is **not** derived from anything in STEAD's own metadata (STEAD
+rows don't carry a usable absolute timestamp in this pipeline's current
+columns). Practically: every row from one pipeline run shares almost the
+same `event_time` (whenever the run happened), not the historical time
+the underlying earthquake actually occurred. `created_at` and `event_time`
+will therefore look almost identical for all of today's data — that's
+expected, not a bug, and worth knowing before building a frontend
+timeline view that assumes `event_time` reflects real-world event history.
+
+### Worked example: tracing one `event_id` all the way back to a file on disk
+
+This traces a single row through every layer, so "which table connects to
+what" has one concrete path to follow instead of an abstract diagram.
+Numbers below are illustrative (they follow the real code's logic, not a
+copy-pasted live row) — run the SQL yourself against the real table to
+get a real `event_id` to substitute.
+
+**Step 1 — pick a real row from the database:**
+
+```sql
+select event_id, raw_waveform_ref, scenario_family_id, source_dataset, split
+from vibration_classified_events
+limit 1;
+```
+
+Say this returns:
+
+```
+event_id            = 3fa2b6e1-...-uuid
+raw_waveform_ref    = stead_0_0
+scenario_family_id  = stead_10974
+source_dataset      = STEAD
+split               = train
+```
+
+**Step 2 — `raw_waveform_ref` is the gold-layer `window_id`.** Find the
+matching row in the gold CSV that `replay_pipeline.py` read from
+(`data/module2_vibration/gold/stead_gold.csv`, produced by
+`gold_label_split.py`):
+
+```python
+import pandas as pd
+gold = pd.read_csv("data/module2_vibration/gold/stead_gold.csv")
+gold[gold["window_id"] == "stead_0_0"]
+# -> source_idx=0, scenario_family_id=stead_10974, event_type=seismic, split=train
+```
+
+`source_idx` (here, `0`) is the pointer into the *silver*-layer metadata —
+it's the row position in the silver CSV this window was cut from (see
+`gold_label_split.py`'s merge on `source_idx`, line 107-112).
+
+**Step 3 — `source_idx` traces to the silver-layer window**, which in
+turn traces to the bronze-layer metadata row it was windowed from
+(`data/module2_vibration/silver/stead_silver_metadata.csv`, produced by
+`silver_clean.py` — this file carries the `trace_name` column through
+from bronze, unchanged, specifically so this trace-back is possible).
+
+**Step 4 — the bronze row's `trace_name` is the real key into the
+original committed sample file.** This is the actual raw waveform data:
+
+```python
+import h5py
+with h5py.File("data/stead_sample/stead_sample_waveforms.hdf5", "r") as f:
+    waveform = f["109C.TA_20090529014938_EV"][()]  # shape (6000, 3) — see local_sample.py's transpose note
+```
+
+**The full chain, restated as one line**:
+
+```
+vibration_classified_events.event_id
+  -> .raw_waveform_ref (= gold.window_id)
+    -> gold.source_idx
+      -> silver_metadata row (same source_idx) -> .trace_name
+        -> stead_sample_waveforms.hdf5[trace_name]  (the actual numbers)
+```
+
+Every arrow above is a real, followable join key that exists in a real
+file or table today — nothing in this chain is aspirational.
+
+---
+
+## Quick reference: which file/table owns which question
+
+| Question | Where to look |
+|---|---|
+| "What does this event's raw waveform actually look like?" | `data/stead_sample/stead_sample_waveforms.hdf5`, keyed by `trace_name` (via the chain above) |
+| "Why did this window get labeled `seismic`?" | `gold_label_split.py`'s `TRACE_CATEGORY_TO_EVENT_TYPE` mapping, applied to the bronze row's `trace_category` |
+| "Why is this row in `train` and not `test`?" | `gold_label_split.py`'s `split_by_family()`, keyed on `scenario_family_id` |
+| "What confidence/model produced this classification?" | `replay_pipeline.py`'s `classify_window()` — today, always the stub (see `docs/MODEL_STRATEGY.md`) |
+| "Is this model any good?" | `model_registry` row where `slug = 'seismic-vibration-ground'` (joined manually, not via FK — see above) |
+| "What does the frontend actually receive for this event?" | `src/03_api_service/app/routers/events.py`'s `EVENTS_QUERY` column list (table above) |
+| "Which pipeline run wrote this row, and when?" | `vibration_classified_events.pipeline_run_id` + `created_at` — see the "Per-pipeline-run breakdown" query in `data/analysis/vibration_classified_events_queries.sql` |

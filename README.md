@@ -12,8 +12,18 @@ built, and an honest read on current maturity:
 **[docs/PROBLEM_AND_APPROACH.md](docs/PROBLEM_AND_APPROACH.md)**.
 
 For what the data actually looks like at each pipeline stage, tied to the
-exact code that produces it:
+exact code that produces it — including how the database and API layers
+connect (which table generates what, and how one `event_id` traces all
+the way back to a raw waveform file):
 **[docs/DATA_FLOW_WALKTHROUGH.md](docs/DATA_FLOW_WALKTHROUGH.md)**.
+
+For what "the model" is today, why it's still a stub, and the two-stage
+plan (and demo narrative) for wiring in a real one:
+**[docs/MODEL_STRATEGY.md](docs/MODEL_STRATEGY.md)**.
+
+For the known STEAD-specific shortcuts still in the code, why they're
+acceptable for now, and exactly what has to happen before they bite:
+**[docs/TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md)**.
 
 ## Layout
 

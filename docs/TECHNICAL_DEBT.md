@@ -203,6 +203,63 @@ against.
 
 ---
 
+## 5. `classify_window()`'s "confidence" is a max-over-time score — asymmetric and possibly misleading for the environmental branch
+
+**Where**: `src/02_ml_pipeline/replay_pipeline.py`'s `classify_window()`.
+
+**What's happening**: after the first real CI run, every one of the 100
+rows came back with `confidence` rounding to `1.000`, split exactly 50/50
+`seismic`/`environmental`, and zero abstains. That's not obviously a good
+sign — it's a sign the confidence number needs scrutiny before it's
+trusted or shown to anyone external.
+
+The likely cause: `seismic_score`/`noise_score` are each `probs[...].max()`
+— the single highest probability PhaseNet assigned *anywhere in the whole
+30-second window*, per class. For the `seismic` branch this is plausibly
+meaningful (PhaseNet finding one genuinely sharp, confident P/S arrival is
+exactly what a well-trained phase-picker should do). For the
+`environmental` branch it's close to a tautology: almost *any* 30-second
+window — real earthquake windows included — has some quiet moment where
+the model assigns noise a probability near 1. Taking the max over the
+whole window means "confidence" for `environmental` rows is measuring
+"was there ever a quiet instant," not "is this window free of seismic
+activity." That would explain a suspiciously perfect, undifferentiated
+`1.000` average far better than "the model is extremely good."
+
+**Why this wasn't caught before landing**: verifying the *interface*
+(shapes, what type the model returns) was done locally against a real
+`seisbench` install before this shipped. Verifying the *statistical
+behavior* of the resulting confidence score across a real batch of mixed
+data requires exactly the kind of run that just happened in CI — this is
+the first time real numbers existed to look at.
+
+**What breaks if this isn't fixed**: any accuracy/calibration claim built
+on this confidence number is unreliable, and the abstain/human-review
+governance mechanism is effectively disabled for the `environmental`
+branch (nothing will ever score low enough to trigger review) — exactly
+the guardrail this project has otherwise been careful to keep honest.
+
+**Trigger to fix**: before reporting any accuracy/confidence-calibration
+number externally (a demo, an investor conversation, `model_registry`'s
+`accuracy_pct`), or before this data reaches a frontend dashboard. Two
+concrete, independent fixes worth doing together, not treated as
+optional polish:
+1. **Verify actual accuracy against ground truth first.** The DB's
+   `event_type` column now holds the *model's* decision, not the known
+   answer — the gold-layer CSV's ground truth is only preserved in the
+   CI run's uploaded artifact (`pipeline-output-stead`), not queryable
+   from Supabase directly. Worth adding the ground-truth label into the
+   `evidence` jsonb column at write time specifically so accuracy can be
+   checked with one SQL query against the live table, not a downloaded
+   artifact.
+2. **Replace the max-over-time heuristic with something that actually
+   distinguishes "quiet somewhere" from "quiet everywhere"** — e.g. a
+   window-level score computed from the mean (not max) P/S probability,
+   or the fraction of timesteps above a pick threshold, rather than a
+   single time-step's peak.
+
+---
+
 ## What this list deliberately does not include
 
 **The adapter/plugin pattern itself** (a `DatasetAdapter` Protocol

@@ -205,6 +205,13 @@ against.
 
 ## 5. `classify_window()`'s "confidence" is a max-over-time score — asymmetric and possibly misleading for the environmental branch
 
+**Status: fixed** (`_peak_sustained_probability()` now replaces the raw
+max, and `ground_truth_event_type` is now stored in `evidence` — see below
+for what was true before the fix and what changed). Left in the register
+rather than deleted, since the trigger conditions below are still
+relevant (e.g. the threshold may need retuning once real accuracy is
+measured against the newly-preserved ground truth).
+
 **Where**: `src/02_ml_pipeline/replay_pipeline.py`'s `classify_window()`.
 
 **What's happening**: after the first real CI run, every one of the 100
@@ -257,6 +264,22 @@ optional polish:
    window-level score computed from the mean (not max) P/S probability,
    or the fraction of timesteps above a pick threshold, rather than a
    single time-step's peak.
+
+**Both done.** `_peak_sustained_probability()` replaces the raw
+`.max()` with the peak of a moving average over `sustain_window_sec`
+(config, default 0.5s) — a single stray high sample gets diluted by
+averaging with its (low) neighbors, while a genuine arrival, which
+naturally spans many consecutive samples, survives smoothing. `run()`
+now writes `ground_truth_event_type` into `evidence` alongside the
+model's own `event_type`, so real accuracy is one SQL query away — see
+`data/analysis/vibration_classified_events_queries.sql`'s "Accuracy
+against ground truth" section.
+
+**Still open**: `detection_threshold` (0.3) and `sustain_window_sec`
+(0.5s) are both reasonable starting points, not tuned against real
+accuracy data — now that accuracy is actually measurable, revisit both
+once there's a real precision/recall signal to tune against, rather than
+leaving them as first-guess defaults indefinitely.
 
 ---
 

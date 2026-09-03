@@ -67,6 +67,38 @@ from vibration_classified_events e
 join model_registry r on r.slug = 'seismic-vibration-ground'
 group by e.event_type, r.status, r.accuracy_pct;
 
+-- ── Accuracy against ground truth ────────────────────────────────────────
+-- event_type is the model's OWN guess; evidence->>'ground_truth_event_type'
+-- is the known correct answer from gold_label_split.py (only present on
+-- rows written after the confidence-metric fix — see
+-- docs/TECHNICAL_DEBT.md item 5. Older rows won't have this key; the
+-- `where evidence ? '...'` clause below excludes those instead of
+-- miscounting them.)
+
+-- Overall accuracy
+select
+  count(*) filter (where event_type = evidence->>'ground_truth_event_type') as correct,
+  count(*) as total,
+  round(
+    100.0 * count(*) filter (where event_type = evidence->>'ground_truth_event_type')
+      / nullif(count(*), 0),
+    1
+  ) as pct_correct
+from vibration_classified_events
+where evidence ? 'ground_truth_event_type';
+
+-- Confusion matrix: what did the model predict for each real answer?
+-- A healthy result has almost everything on the diagonal (ground_truth =
+-- predicted). Off-diagonal rows are the model's actual mistakes.
+select
+  evidence->>'ground_truth_event_type' as ground_truth,
+  event_type as predicted,
+  count(*)
+from vibration_classified_events
+where evidence ? 'ground_truth_event_type'
+group by 1, 2
+order by 1, 2;
+
 -- ── Geospatial coverage ───────────────────────────────────────────────────
 -- Many Phase 1 rows won't have a location — replayed catalog data isn't
 -- always lat/lon-tagged the way a live deployed sensor would be.

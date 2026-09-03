@@ -34,10 +34,12 @@ import torch
 
 from .schemas import ClassificationResult
 
-# Matches config_vibration.yaml's model.detection_threshold/review_threshold
-# — duplicated here for the same cross-deployment reason noted above.
+# Matches config_vibration.yaml's model.detection_threshold/review_threshold/
+# sustain_window_sec — duplicated here for the same cross-deployment reason
+# noted above.
 DETECTION_THRESHOLD = 0.3
 REVIEW_THRESHOLD = 0.5
+SUSTAIN_WINDOW_SEC = 0.5
 
 
 @lru_cache(maxsize=1)
@@ -64,17 +66,35 @@ def _phasenet_normalize(window: np.ndarray) -> np.ndarray:
     return (window - mean) / (std + 1e-10)
 
 
-def classify_waveform(window: np.ndarray) -> ClassificationResult:
+def _peak_sustained_probability(prob_curve: np.ndarray, sustain_samples: int) -> float:
+    """Same fix, same reason, as replay_pipeline.py's identical helper: a
+    single instantaneous peak probability anywhere in a 30s window is
+    close to a tautology (almost any window has some instant that looks
+    confidently quiet or confidently arrival-like by chance). This
+    requires the probability to stay high for a realistic arrival-length
+    stretch (a moving average) before it counts. See that function's
+    docstring in replay_pipeline.py for the full explanation and a
+    worked example."""
+    if len(prob_curve) < sustain_samples:
+        return float(prob_curve.max())
+    smoothing_kernel = np.ones(sustain_samples) / sustain_samples
+    smoothed = np.convolve(prob_curve, smoothing_kernel, mode="valid")
+    return float(smoothed.max())
+
+
+def classify_waveform(window: np.ndarray, sampling_rate_hz: int = 100) -> ClassificationResult:
     """window: a (channels, samples) array — same shape convention as
     local_sample.get_waveform()/silver_clean.py's windows elsewhere in
     this project.
 
     PhaseNet outputs a per-timestep probability for Noise/P-wave/S-wave,
-    not a single event-type label — "seismic" here means its peak P or S
-    probability anywhere in the window cleared DETECTION_THRESHOLD (0.3,
-    matching SeisBench's own default pick threshold). It cannot produce
-    "vehicle_human": no dataset behind this pretrained model labels that
-    class. See gold_label_split.py's docstring and docs/MODEL_STRATEGY.md.
+    not a single event-type label — "seismic" here means its P or S
+    probability stayed high for a sustained, realistic arrival-length
+    stretch (see _peak_sustained_probability()) and cleared
+    DETECTION_THRESHOLD (0.3, matching SeisBench's own default pick
+    threshold). It cannot produce "vehicle_human": no dataset behind this
+    pretrained model labels that class. See gold_label_split.py's
+    docstring and docs/MODEL_STRATEGY.md.
     """
     model = _load_model()
     normalized = _phasenet_normalize(window.astype(np.float32))
@@ -82,8 +102,13 @@ def classify_waveform(window: np.ndarray) -> ClassificationResult:
     with torch.no_grad():
         probs = model(torch.from_numpy(normalized).unsqueeze(0))  # (1, 3, time); channels = N, P, S
 
-    noise_score = float(probs[0, 0, :].max())
-    seismic_score = float(probs[0, 1:, :].max())  # max over P and S channels, across time
+    sustain_samples = int(SUSTAIN_WINDOW_SEC * sampling_rate_hz)
+    noise_curve, p_curve, s_curve = (probs[0, i, :].numpy() for i in range(3))
+    noise_score = _peak_sustained_probability(noise_curve, sustain_samples)
+    seismic_score = max(
+        _peak_sustained_probability(p_curve, sustain_samples),
+        _peak_sustained_probability(s_curve, sustain_samples),
+    )
 
     if seismic_score >= DETECTION_THRESHOLD:
         event_type = "seismic"

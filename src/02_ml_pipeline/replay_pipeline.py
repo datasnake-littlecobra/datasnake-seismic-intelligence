@@ -163,6 +163,46 @@ def _phasenet_normalize(window: np.ndarray) -> np.ndarray:
     return (window - mean) / (std + 1e-10)
 
 
+def _peak_sustained_probability(prob_curve: np.ndarray, sustain_samples: int) -> float:
+    """Smooths a per-timestep probability curve with a moving average over
+    `sustain_samples` consecutive timesteps, then returns the highest value
+    that smoothed curve ever reaches.
+
+    WHY THIS EXISTS: the first real CI run of classify_window() (before
+    this function existed) reported confidence ~1.000 on every single row,
+    for both classes, with zero abstains — too uniform to be a real
+    signal. Root cause: taking the single highest instantaneous
+    probability anywhere in a 3000-sample window is close to a tautology
+    for the "how sure are we this window is quiet" question — almost any
+    30-second clip, earthquake or not, has at least one genuinely quiet
+    instant, so that number is almost always going to be near 1 regardless
+    of the window's actual content. It's like asking "was there ever a
+    quiet half-second in this 30-second video" — nearly always yes, even
+    during an action scene.
+
+    A moving average fixes this by requiring the high probability to
+    HOLD for a realistic arrival-length stretch (default: half a second,
+    50 samples at 100Hz), not just one instant. A single stray high
+    sample surrounded by low ones gets diluted by the average — e.g. one
+    sample at 1.0 surrounded by 49 samples near 0 averages out to about
+    1/50 = 0.02, nowhere near a detection threshold. A genuine phase
+    arrival, in contrast, isn't a single flickering sample in the model's
+    output — it naturally spans many consecutive samples — so it stays
+    high even after averaging. See
+    src/02_ml_pipeline/tests/test_phasenet_confidence.py for this exact
+    behavior demonstrated on synthetic data.
+
+    Falls back to a plain max if the window is shorter than the smoothing
+    stretch (shouldn't happen with this project's fixed 30s windows, but a
+    silent divide-by-near-nothing on a tiny array is worse than this).
+    """
+    if len(prob_curve) < sustain_samples:
+        return float(prob_curve.max())
+    smoothing_kernel = np.ones(sustain_samples) / sustain_samples
+    smoothed = np.convolve(prob_curve, smoothing_kernel, mode="valid")
+    return float(smoothed.max())
+
+
 def classify_window(dataset: str, row: pd.Series) -> dict:
     """Runs SeisBench's pretrained PhaseNet on this window's real waveform
     and derives a window-level classification from its output — this is
@@ -190,14 +230,16 @@ def classify_window(dataset: str, row: pd.Series) -> dict:
     WHAT THIS HEURISTIC IS AND ISN'T: PhaseNet is a phase-PICKING model —
     per timestep, it outputs a probability for Noise / P-wave / S-wave. It
     was never trained to emit one "is this an earthquake" label per
-    window. The rule used here — "seismic" if the model's peak P or S
-    probability anywhere in the window clears `detection_threshold`,
-    "environmental" otherwise — reuses PhaseNet's own detection convention
-    (config's default of 0.3 matches SeisBench's own default pick
-    threshold) rather than inventing a new one. It structurally cannot
-    produce "vehicle_human": no dataset behind this pretrained model
-    labels that class, so there's no signal for it to have learned — see
-    gold_label_split.py's docstring and docs/MODEL_STRATEGY.md.
+    window. The rule used here — "seismic" if the model's P or S
+    probability stays high for a realistic arrival-length stretch anywhere
+    in the window (see _peak_sustained_probability()) and clears
+    `detection_threshold`, "environmental" otherwise — reuses PhaseNet's
+    own detection convention (config's default of 0.3 matches SeisBench's
+    own default pick threshold) rather than inventing a new one. It
+    structurally cannot produce "vehicle_human": no dataset behind this
+    pretrained model labels that class, so there's no signal for it to
+    have learned — see gold_label_split.py's docstring and
+    docs/MODEL_STRATEGY.md.
 
     model_version is a fixed label identifying OUR integration (pretrained
     "stead" weights, unmodified, no fine-tuning) — not a SeisBench-internal
@@ -214,8 +256,13 @@ def classify_window(dataset: str, row: pd.Series) -> dict:
     with torch.no_grad():
         probs = model(torch.from_numpy(normalized).unsqueeze(0))  # (1, 3, time); channels = N, P, S
 
-    noise_score = float(probs[0, 0, :].max())
-    seismic_score = float(probs[0, 1:, :].max())  # max over P and S channels, across time
+    sustain_samples = int(CFG["model"]["sustain_window_sec"] * CFG["model"]["sampling_rate_hz"])
+    noise_curve, p_curve, s_curve = (probs[0, i, :].numpy() for i in range(3))
+    noise_score = _peak_sustained_probability(noise_curve, sustain_samples)
+    seismic_score = max(
+        _peak_sustained_probability(p_curve, sustain_samples),
+        _peak_sustained_probability(s_curve, sustain_samples),
+    )
 
     detection_threshold = CFG["model"]["detection_threshold"]
     review_threshold = CFG["model"]["review_threshold"]
@@ -307,7 +354,19 @@ def run(dataset: str, data_version: str = "v1") -> int:
                 "source_dataset": row["source_dataset"],
                 "data_version": data_version,
                 "model_version": classification["model_version"],
-                "evidence": {"window_id": row["window_id"], "source_idx": int(row["source_idx"])},
+                "evidence": {
+                    "window_id": row["window_id"],
+                    "source_idx": int(row["source_idx"]),
+                    # The known correct answer from gold_label_split.py's
+                    # STEAD-vocabulary mapping — NOT the model's guess
+                    # (that's the event_type column above). Stored here
+                    # specifically so accuracy can be checked with one SQL
+                    # query against the live table (compare this to
+                    # event_type) instead of needing the CI run's
+                    # downloaded gold-layer CSV artifact. See
+                    # docs/TECHNICAL_DEBT.md item 5.
+                    "ground_truth_event_type": row["event_type"],
+                },
                 "abstain": classification["abstain"],
                 "requires_human_review": classification["requires_human_review"],
             }

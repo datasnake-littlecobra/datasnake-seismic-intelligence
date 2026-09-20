@@ -117,19 +117,48 @@ Same row shape as above, single object. `404` if not found.
 
 ## 6. Known Phase 1 limitations to design the UI around
 
-- **`vehicle_human` classification is not yet trained.** STEAD/INSTANCE don't
-  supply labeled examples for it (see `src/02_ml_pipeline/gold_label_split.py`
-  docstring). Events of this type won't appear with real confidence yet —
-  don't build a UI that assumes all 4 classes are equally populated.
+- **`vehicle_human` classification is not yet trained.** No public dataset
+  (STEAD/INSTANCE included) separately labels vehicle/human-caused
+  vibration from other non-seismic activity — see
+  `src/02_ml_pipeline/gold_label_split.py`'s docstring and
+  `docs/MODEL_STRATEGY.md`. Events of this type won't appear at all today
+  — don't build a UI that assumes all 4 classes are populated.
 - **Data is replayed public data, not a live sensor feed.** `sensor_id`
-  values look like `replay:stead` / `replay:instance` in Phase 1, not real
-  hardware sensor IDs — a simple tabular view (matching the existing
-  `datasnake.io/datapreview` style) is the right fidelity level for now, not
-  a "live" real-time indicator.
-- **`abstain: true` rows currently dominate** until a real model is wired
-  into `src/02_ml_pipeline/replay_pipeline.py`'s `classify_window()` — treat
-  these as "pipeline ran, no confident classification yet," not an error
-  state, when designing empty/low-confidence UI states.
+  values look like `replay:stead` (not real hardware sensor IDs), and
+  `event_time` is stamped at *pipeline run time*, not the real historical
+  moment the underlying earthquake occurred — nearly every row from one
+  run shares almost the same `event_time`. A simple tabular/list view is
+  the right fidelity level for now, not a "live real-time feed" UI, and
+  don't build a time-series chart assuming `event_time` reflects real
+  event history.
+- **`latitude`/`longitude` are usually null.** Phase 1's replayed catalog
+  data isn't station-geocoded in this pipeline yet — don't build a map
+  view assuming most rows have coordinates; a count/percentage of rows
+  *with* location is a safer thing to surface (see the "Geospatial
+  coverage" query in `data/analysis/vibration_classified_events_queries.sql`).
+- **`severity_score` is always null.** No magnitude/severity model is
+  wired in yet — omit it from any UI rather than showing an empty/zero
+  value that could read as a real "zero severity" claim.
+- **A real classification model IS now wired in** (updated from an
+  earlier version of this doc, which predates this): `confidence` and
+  `event_type` reflect real SeisBench PhaseNet inference, not a stub. A
+  real accuracy check exists too — `evidence->>'ground_truth_event_type'`
+  holds the known correct answer alongside the model's own `event_type`
+  guess (rows written after the fix landed only — see
+  `docs/TECHNICAL_DEBT.md` item 5). **Caveat worth designing around**:
+  today's ~100% measured accuracy is on data very similar to what the
+  model was originally trained on (STEAD itself) — a strong signal the
+  integration works correctly, not yet a claim about real-world accuracy
+  on genuinely novel data. Consider surfacing this nuance in any
+  accuracy/confidence UI rather than presenting a bare "100% accurate"
+  number.
+- **This table intentionally goes through the FastAPI service, not a
+  direct Supabase client read** — even though `vibration_classified_events`
+  has a public-select RLS policy, same as other tables this frontend
+  already reads directly (e.g. `model_registry`). That's a deliberate
+  choice (data/AI-pipeline pattern, future chunking/partitioning work
+  planned in front of the DB), not an oversight — please route through
+  `GET /events`, not `supabase.from('vibration_classified_events')`.
 
 ---
 

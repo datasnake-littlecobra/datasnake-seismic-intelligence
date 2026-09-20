@@ -17,8 +17,8 @@ connect (which table generates what, and how one `event_id` traces all
 the way back to a raw waveform file):
 **[docs/DATA_FLOW_WALKTHROUGH.md](docs/DATA_FLOW_WALKTHROUGH.md)**.
 
-For what "the model" is today, why it's still a stub, and the two-stage
-plan (and demo narrative) for wiring in a real one:
+For what "the model" is, the two-stage plan, and the demo narrative for
+each stage:
 **[docs/MODEL_STRATEGY.md](docs/MODEL_STRATEGY.md)**.
 
 For the known STEAD-specific shortcuts still in the code, why they're
@@ -51,3 +51,7 @@ can't be done from a coding session.
 
 Frontend integration doc for the `terrawatchapp-beta` team:
 [docs/API_CONTRACT_MODULE2.md](docs/API_CONTRACT_MODULE2.md).
+
+A ready-to-paste kickoff prompt for a `terrawatchapp-beta` Claude Code
+session to verify the connection and scope frontend work against this API:
+[docs/FRONTEND_INTEGRATION_PROMPT.md](docs/FRONTEND_INTEGRATION_PROMPT.md).

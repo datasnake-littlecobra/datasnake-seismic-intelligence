@@ -4,6 +4,11 @@ Ground-sensor vibration classification: turns waveform data into classified
 events (seismic / vehicle-human / environmental / unknown) with confidence
 scores, then serves them to DataSnake's monitoring dashboard.
 
+**Note:** a second module (parametric flood-risk index, for insurance
+underwriting) is being sub-modularized into this repo rather than a new
+one — see `docs/PARAMETRIC_INSURANCE_PRIMER.md`. The repo name predates
+that decision; not renamed yet, tracked as known naming debt.
+
 Full architecture, current status, and troubleshooting notes:
 **[docs/MODULE2_ARCHITECTURE.md](docs/MODULE2_ARCHITECTURE.md)** — start there.
 
@@ -55,3 +60,14 @@ Frontend integration doc for the `terrawatchapp-beta` team:
 A ready-to-paste kickoff prompt for a `terrawatchapp-beta` Claude Code
 session to verify the connection and scope frontend work against this API:
 [docs/FRONTEND_INTEGRATION_PROMPT.md](docs/FRONTEND_INTEGRATION_PROMPT.md).
+
+A ready-to-paste implementation spec for the same session to add Module 2
+to the real app's live events feed/map/alerts (small, self-contained, no
+schema changes):
+[docs/EDGE_FUNCTION_HANDOFF_VIBRATION.md](docs/EDGE_FUNCTION_HANDOFF_VIBRATION.md).
+
+## Parametric insurance (new, second module)
+
+For the actual mechanics of parametric insurance, basis risk, and EP
+curves — written as a plain-language reference doc, not a pitch:
+[docs/PARAMETRIC_INSURANCE_PRIMER.md](docs/PARAMETRIC_INSURANCE_PRIMER.md).

@@ -147,6 +147,19 @@ Stage 1 gives us a real, credible answer for the `seismic` vs.
 
 ### Stage 2 — Train a model on our own data (do this later, once there's a reason to)
 
+> **PAUSED as of 2026-09-30, not abandoned.** Company priority shifted to
+> shipping a parametric insurance flood-risk MVP first (new module, separate
+> effort). Stage 2 work here — sourcing a licensed vehicle/human vibration
+> dataset, and scaffolding a fine-tuning pipeline on top of PhaseNet's
+> existing architecture (decision already made: fine-tune, don't build a new
+> architecture from scratch — see the discussion this note is summarizing)
+> — was queued to start next before the pivot. Resume by: (1) searching for
+> a vehicle/human-labeled vibration dataset compatible with PhaseNet's input
+> shape (3-channel, similar sampling rate), verifying its license with the
+> same rigor as STEAD/INSTANCE; (2) scaffolding the fine-tuning training
+> loop against placeholder STEAD data in the meantime, so it's ready to
+> swap in real data the moment it's sourced.
+
 **What this actually requires**, stated plainly since "train our own
 model" is often underestimated in scope:
 - The **full** STEAD dataset (or a much larger sample than today's 50
